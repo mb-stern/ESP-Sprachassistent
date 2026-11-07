@@ -13,7 +13,17 @@ class ESPSprachassistent extends IPSModule
         $this->RegisterPropertyString('Address', '');
         $this->RegisterPropertyString('DeviceID', '');
         $this->RegisterPropertyString('WebPassword', '');
-        $this->SetVisualizationType(1);
+        $this->SetVisualizationType(
+            defined('INSTANCE_VISUALIZATION_TYPE_HTML_FULLSCREEN') ? INSTANCE_VISUALIZATION_TYPE_HTML_FULLSCREEN : 1
+        );
+    }
+
+    public function ApplyChanges()
+    {
+        parent::ApplyChanges();
+        $this->SetVisualizationType(
+            defined('INSTANCE_VISUALIZATION_TYPE_HTML_FULLSCREEN') ? INSTANCE_VISUALIZATION_TYPE_HTML_FULLSCREEN : 1
+        );
     }
 
     public function GetVisualizationTile(): string
