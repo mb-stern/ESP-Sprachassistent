@@ -236,10 +236,11 @@ class ESPSprachassistent extends IPSModule
             $options[CURLOPT_POST] = true;
             $options[CURLOPT_POSTFIELDS] = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
         }
-        curl_setopt_array($client, $options);
+        if (!curl_setopt_array($client, $options)) {
+            throw new RuntimeException('Verbindung zum ESP konnte nicht konfiguriert werden.');
+        }
         $body = curl_exec($client);
         $code = (int) curl_getinfo($client, CURLINFO_RESPONSE_CODE);
-        curl_close($client);
         if ($code === 401 || $code === 403) {
             throw new RuntimeException('Der ESP hat den Zugriff verweigert. Bitte Adresse und Web-Passwort prüfen.');
         }

@@ -6,8 +6,10 @@
 <title>Musik</title>
 <style>
   * { box-sizing: border-box; }
-  body { font: 1rem system-ui, sans-serif; margin: 0; padding: .75rem; color: inherit; }
-  h2, h3 { margin: 0 0 .5rem; }
+  :root { color-scheme: light dark; background: transparent; }
+  body { font: 1rem system-ui, sans-serif; margin: 0; padding: 2.65rem .65rem .65rem; }
+  main { color: CanvasText; background: Canvas; border-radius: .45rem; padding: .65rem; }
+  h3 { margin: 0 0 .5rem; }
   section, form, details { margin-bottom: .7rem; }
   details { border: 1px solid #808080; border-radius: .45rem; padding: .55rem; }
   summary { cursor: pointer; overflow-wrap: anywhere; }
@@ -25,8 +27,7 @@
 </style>
 </head>
 <body>
-<main>
-  <h2>Musik</h2>
+<main aria-label="Musik">
   <p id="notice" role="status">Verbindung wird geladen …</p>
   <div id="music" hidden>
     <details id="sourcePanel">
@@ -104,6 +105,7 @@ function notice(text) { el('notice').textContent = text; }
 async function run(operation, showProgress = true) {
     if (busy) return;
     busy = true;
+    el('retry').disabled = true;
     document.querySelector('main').setAttribute('aria-busy', 'true');
     if (showProgress) notice('Bitte warten …');
     try {
@@ -113,6 +115,7 @@ async function run(operation, showProgress = true) {
         if (!state) el('retry').hidden = false;
     } finally {
         busy = false;
+        el('retry').disabled = false;
         document.querySelector('main').setAttribute('aria-busy', 'false');
     }
 }
@@ -182,6 +185,7 @@ function renderState(next) {
     renderOutputs(state.outputs);
     el('music').hidden = !state.enabled;
     el('retry').hidden = state.enabled;
+    el('retry').textContent = 'Status erneut laden';
 }
 
 function renderOutputs(outputs) {
@@ -210,6 +214,7 @@ async function connect(background = false) {
         state = null;
         el('music').hidden = true;
         el('retry').hidden = false;
+        el('retry').textContent = 'Erneut verbinden';
         throw error;
     }
 }
