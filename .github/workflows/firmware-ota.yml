@@ -1,0 +1,97 @@
+name: Firmware-OTA veröffentlichen
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Firmware-Tag, z. B. firmware-v0.40.5'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: firmware-ota
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'firmware-v')
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: GitHub Pages prüfen
+        uses: actions/configure-pages@v5
+      - name: Release prüfen und OTA-Dateien bereitstellen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^firmware-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mkdir -p site/ota
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern ota-release.json --pattern '*-app.bin' --dir site/ota
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets > release-assets.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          root = Path('site/ota')
+          manifest = json.loads((root / 'ota-release.json').read_text())
+          version = os.environ['RELEASE_TAG'].removeprefix('firmware-v')
+          name = f'symcon-speaker-beta-{version.removesuffix(".0")}'
+          app_name = name + '-app.bin'
+          if manifest['version'] != version or manifest['board'] != 'Waveshare ESP32-S3-AUDIO-Board':
+              raise SystemExit('Manifest, Firmware-Tag oder Board stimmen nicht überein.')
+          if manifest['app_url'] != app_name or sorted(p.name for p in root.glob('*.bin')) != [app_name]:
+              raise SystemExit('Im Release muss genau die zur Version passende App-BIN stehen.')
+          data = (root / app_name).read_bytes()
+          if not 1024 <= len(data) <= 0x3f0000 or manifest['size'] != len(data):
+              raise SystemExit('App-BIN-Grösse ist ungültig.')
+          if hashlib.sha256(data).hexdigest() != manifest['sha256']:
+              raise SystemExit('Die App-BIN stimmt nicht mit der SHA-256-Prüfsumme überein.')
+          assets = json.loads(Path('release-assets.json').read_text())['assets']
+          if not any(asset['name'] == name + '.bin' and 0xe08000 <= asset['size'] <= 0x1000000 for asset in assets):
+              raise SystemExit('Das USB-Vollimage für das 16-MB-Board fehlt oder hat eine falsche Grösse.')
+
+          url = 'https://mb-stern.github.io/ESP-Sprachassistent/ota/ota-release.json'
+          try:
+              with urllib.request.urlopen(url, timeout=15) as response:
+                  previous = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+          else:
+              old = previous['version']
+              if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', old):
+                  raise SystemExit('Die veröffentlichte Version ist ungültig.')
+              if tuple(map(int, old.split('.'))) > tuple(map(int, version.split('.'))):
+                  raise SystemExit('Eine ältere Version darf die veröffentlichte Firmware nicht ersetzen.')
+              if old == version and previous['sha256'] != manifest['sha256']:
+                  raise SystemExit('Geänderte Firmware braucht eine neue Versionsnummer.')
+
+          Path('site/index.html').write_text(
+              '<!doctype html><meta charset="utf-8"><title>ESP-Sprachassistent</title>'
+              '<h1>ESP-Sprachassistent</h1><a href="ota/ota-release.json">OTA-Manifest</a>',
+              encoding='utf-8')
+          PY
+      - name: OTA-Dateien an Pages übergeben
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - name: OTA-Dateien veröffentlichen
+        id: deployment
+        uses: actions/deploy-pages@v4
