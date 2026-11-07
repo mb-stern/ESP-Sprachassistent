@@ -8,14 +8,21 @@
   * { box-sizing: border-box; }
   :root {
     color-scheme: light dark;
-    background: transparent;
     --tile-surface: var(--card-color, Canvas);
     --tile-text: var(--content-color, CanvasText);
     --tile-accent: var(--accent-color, Highlight);
     --tile-border: color-mix(in srgb, var(--tile-text) 30%, transparent);
+    background-color: var(--tile-surface);
+    color: var(--tile-text);
   }
-  body { font: 1rem system-ui, sans-serif; margin: 0; padding: 2.65rem .65rem .65rem; }
-  main { color: var(--tile-text); background: var(--tile-surface); border-radius: .45rem; padding: .65rem; }
+  body {
+    font: 1rem system-ui, sans-serif;
+    margin: 0;
+    min-height: 100vh;
+    padding: 2.65rem .65rem .65rem;
+    background-color: var(--tile-surface);
+  }
+  main { padding: .65rem; }
   h3 { margin: 0 0 .5rem; }
   section, form, details { margin-bottom: .7rem; }
   details { border: 1px solid var(--tile-border); border-radius: .45rem; padding: .55rem; }
@@ -43,6 +50,7 @@
   li { border-bottom: 1px solid var(--tile-border); padding: .4rem 0; overflow-wrap: anywhere; }
   li small { display: block; }
   #notice { min-height: 1.25em; margin: .4rem 0; }
+  #notice:empty { display: none; }
   [hidden] { display: none !important; }
 </style>
 </head>

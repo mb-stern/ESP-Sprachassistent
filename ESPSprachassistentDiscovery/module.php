@@ -108,7 +108,7 @@ class ESPSprachassistentDiscovery extends IPSModule
             $row['instanceID'] = $ids[$id] ?? $addresses[$device['ip']] ?? 0;
             $row['create'] = [
                 'moduleID' => self::DEVICE_MODULE,
-                'name' => $device['room'] === '' ? $device['name'] : $device['name'] . ' · ' . $device['room'],
+                'name' => $device['name'],
                 'configuration' => ['Address' => 'http://' . $device['ip'], 'DeviceID' => $id]
             ];
             $values[] = $row;
