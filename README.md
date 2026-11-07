@@ -6,6 +6,10 @@ Die Haussteuerung verbindet sich optional über **MCP (Model Context Protocol)**
 
 Der Lautsprecher sucht Musik in Plex, LMS und Radio Browser. Er kann selbst abspielen oder freigegebene Sonos-Geräte, LMS-Radios und Bose SoundTouch ansteuern. Das optionale **Symcon-Modul** bringt diese Suche und die Wiedergabesteuerung als Musik-Kachel in Symcon. Quelle und Ausgabe werden auf dem ESP gespeichert und auch von der Sprachsteuerung verwendet.
 
+## Verwendeter Lautsprecher
+
+Für dieses Projekt verwenden wir das runde **Waveshare ESP32-S3-AUDIO-Board** mit Acrylabdeckung und kleinem angeschlossenem Lautsprecher. Das Board hat zwei digitale Mikrofone, einen RGB-LED-Ring, 16 MB Flash und 8 MB PSRAM. USB-C dient zur Stromversorgung und zum Flashen. Die angebotenen BIN-Dateien sind für dieses Audio-Board gebaut. [Produktseite](https://www.waveshare.com/esp32-s3-audio-board.htm) · [Waveshare-Dokumentation](https://docs.waveshare.com/ESP32-S3-AUDIO-Board)
+
 ## Firmware auf einen neuen Lautsprecher installieren
 
 1. Unter [GitHub Releases](https://github.com/mb-stern/ESP-Sprachassistent/releases) das USB-Vollimage `symcon-speaker-beta-<Version>.bin` für das Waveshare-Board herunterladen.
