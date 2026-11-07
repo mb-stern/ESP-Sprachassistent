@@ -11,6 +11,7 @@ class ESPSprachassistent extends IPSModule
     {
         parent::Create();
         $this->RegisterPropertyString('Address', '');
+        $this->RegisterPropertyString('DeviceID', '');
         $this->RegisterPropertyString('WebPassword', '');
         $this->SetVisualizationType(1);
     }

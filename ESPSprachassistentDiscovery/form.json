@@ -1,0 +1,23 @@
+{
+  "elements": [
+    {"type": "Label", "caption": "Lautsprecher werden gesucht."},
+    {
+      "type": "Configurator",
+      "name": "Lautsprecher",
+      "caption": "Gefundene ESP-Sprachassistenten",
+      "rowCount": 8,
+      "discoveryInterval": 5,
+      "delete": false,
+      "columns": [
+        {"caption": "Name", "name": "name", "width": "220px"},
+        {"caption": "Raum", "name": "room", "width": "150px"},
+        {"caption": "IP-Adresse", "name": "ip", "width": "140px"},
+        {"caption": "Firmware", "name": "version", "width": "100px"}
+      ],
+      "values": []
+    }
+  ],
+  "actions": [
+    {"type": "Button", "caption": "Erneut suchen", "onClick": "ESPVOICEDISC_Reload($id);"}
+  ]
+}

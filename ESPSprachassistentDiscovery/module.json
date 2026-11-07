@@ -1,0 +1,13 @@
+{
+  "$schema": "https://www.symcon.de/assets/files/validation/moduleSchema.json",
+  "id": "{A9BB6ABA-E49F-448C-BDBC-DF5F64B66741}",
+  "name": "ESPSprachassistentDiscovery",
+  "type": 5,
+  "vendor": "",
+  "aliases": ["ESP-Sprachassistent Discovery"],
+  "url": "https://github.com/mb-stern/ESP-Sprachassistent",
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "ESPVOICEDISC"
+}
