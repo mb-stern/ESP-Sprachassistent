@@ -6,21 +6,41 @@
 <title>Musik</title>
 <style>
   * { box-sizing: border-box; }
-  :root { color-scheme: light dark; background: transparent; }
+  :root {
+    color-scheme: light dark;
+    background: transparent;
+    --tile-surface: var(--card-color, Canvas);
+    --tile-text: var(--content-color, CanvasText);
+    --tile-accent: var(--accent-color, Highlight);
+    --tile-border: color-mix(in srgb, var(--tile-text) 30%, transparent);
+  }
   body { font: 1rem system-ui, sans-serif; margin: 0; padding: 2.65rem .65rem .65rem; }
-  main { color: CanvasText; background: Canvas; border-radius: .45rem; padding: .65rem; }
+  main { color: var(--tile-text); background: var(--tile-surface); border-radius: .45rem; padding: .65rem; }
   h3 { margin: 0 0 .5rem; }
   section, form, details { margin-bottom: .7rem; }
-  details { border: 1px solid #808080; border-radius: .45rem; padding: .55rem; }
+  details { border: 1px solid var(--tile-border); border-radius: .45rem; padding: .55rem; }
   summary { cursor: pointer; overflow-wrap: anywhere; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .45rem 0; }
   label.choice { display: block; padding: .2rem 0; }
-  input, button, select { font: inherit; padding: .35rem .5rem; }
+  input, button, select {
+    font: inherit;
+    color: inherit;
+    background: var(--tile-surface);
+    border: 1px solid var(--tile-border);
+    border-radius: .35rem;
+    padding: .35rem .5rem;
+  }
   input[type=search] { flex: 1 1 9rem; min-width: 0; }
-  button { cursor: pointer; }
-  button:disabled { cursor: default; }
+  input[type=checkbox] { accent-color: var(--tile-accent); }
+  button {
+    cursor: pointer;
+    border-color: var(--tile-accent);
+    background: color-mix(in srgb, var(--tile-accent) 15%, var(--tile-surface));
+  }
+  :focus-visible { outline: 2px solid var(--tile-accent); outline-offset: 2px; }
+  button:disabled { cursor: default; opacity: .55; }
   ul { list-style: none; padding: 0; margin: 0; }
-  li { border-bottom: 1px solid #80808066; padding: .4rem 0; overflow-wrap: anywhere; }
+  li { border-bottom: 1px solid var(--tile-border); padding: .4rem 0; overflow-wrap: anywhere; }
   li small { display: block; }
   #notice { min-height: 1.25em; margin: .4rem 0; }
   [hidden] { display: none !important; }
@@ -74,6 +94,13 @@ const session = Math.random().toString(36).slice(2);
 let sequence = 0, pending = null, busy = false, state = null, views = [], sourceBase = [];
 
 function handleMessage(message) {
+    if (typeof message === 'string') {
+        try {
+            message = JSON.parse(message);
+        } catch {
+            return;
+        }
+    }
     if (!pending || !message || message.request_id !== pending.id) return;
     const {resolve, reject, timer} = pending;
     pending = null;

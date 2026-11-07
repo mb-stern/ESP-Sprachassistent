@@ -59,12 +59,13 @@ class ESPSprachassistent extends IPSModule
             throw new RuntimeException('Ungültige Anfrage-ID.');
         }
 
+        $reply = ['request_id' => $id];
         try {
-            $result = $this->MusicRequest($request);
-            $this->UpdateVisualizationValue(['request_id' => $id, 'result' => $result]);
+            $reply['result'] = $this->MusicRequest($request);
         } catch (RuntimeException $error) {
-            $this->UpdateVisualizationValue(['request_id' => $id, 'error' => $error->getMessage()]);
+            $reply['error'] = $error->getMessage();
         }
+        $this->UpdateVisualizationValue(json_encode($reply, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE));
     }
 
     private function MusicRequest(array $request): array
