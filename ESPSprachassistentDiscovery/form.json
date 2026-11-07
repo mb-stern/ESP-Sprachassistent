@@ -1,6 +1,6 @@
 {
   "elements": [
-    {"type": "Label", "caption": "Lautsprecher werden gesucht."},
+    {"type": "Label", "name": "DiscoveryStatus", "caption": "Lautsprecher werden gesucht …"},
     {
       "type": "Configurator",
       "name": "Lautsprecher",

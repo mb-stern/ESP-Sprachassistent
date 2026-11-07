@@ -8,29 +8,88 @@ class ESPSprachassistentDiscovery extends IPSModule
     private const PORT = 37741;
     private const QUERY = 'ESPVoiceDiscover/1?';
     private const REPLY = 'ESPVoiceDiscover/1!';
+    private const TIMER = 'DiscoveryScan';
+    private const RUNNING_MESSAGE = 'Lautsprecher werden gesucht …';
+    private const START_FAILED = 'Die Gerätesuche konnte nicht gestartet werden.';
+
+    public function Create()
+    {
+        parent::Create();
+        $this->RegisterTimer(self::TIMER, 0, 'ESPVOICEDISC_RunScan($_IPS["TARGET"]);');
+        $this->SetBuffer('ScanPending', '');
+    }
 
     public function Reload(): void
     {
-        $this->ReloadForm();
+        if ($this->QueueScan()) {
+            $this->UpdateFormField('DiscoveryStatus', 'caption', self::RUNNING_MESSAGE);
+        } elseif ($this->GetBuffer('ScanPending') === '') {
+            $this->UpdateFormField('DiscoveryStatus', 'caption', self::START_FAILED);
+        }
     }
 
     public function GetConfigurationForm(): string
     {
         $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true, 16, JSON_THROW_ON_ERROR);
-        try {
-            $devices = $this->Discover();
-            $form['elements'][1]['values'] = $this->DeviceRows($devices);
-            $form['elements'][0]['caption'] = $devices === []
-                ? 'Keine Lautsprecher gefunden. Firmware ab 0.40.5 und dasselbe lokale Netz prüfen.'
-                : count($devices) . ' Lautsprecher gefunden. Wähle einen Eintrag zum Anlegen.';
-        } catch (RuntimeException $error) {
-            $form['elements'][0]['caption'] = $error->getMessage();
+        $snapshot = json_decode($this->GetBuffer('DiscoverySnapshot'), true);
+        if (is_array($snapshot)) {
+            $form['elements'][1]['values'] = $this->DeviceRows($snapshot['devices']);
+            $form['elements'][0]['caption'] = $snapshot['message'];
+        }
+        if ((!is_array($snapshot) || time() - $snapshot['updated'] >= 30) &&
+            !$this->QueueScan() && $this->GetBuffer('ScanPending') === '') {
+            $form['elements'][0]['caption'] = self::START_FAILED;
+        }
+        if ($this->GetBuffer('ScanPending') !== '') {
+            $form['elements'][0]['caption'] = self::RUNNING_MESSAGE;
         }
         return json_encode($form, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
     }
 
+    private function QueueScan(): bool
+    {
+        if ($this->GetBuffer('ScanPending') !== '') {
+            return false;
+        }
+        $this->SetBuffer('ScanPending', 'queued');
+        if (!$this->SetTimerInterval(self::TIMER, 100)) {
+            $this->SetBuffer('ScanPending', '');
+            return false;
+        }
+        return true;
+    }
+
+    public function RunScan(): void
+    {
+        $this->SetTimerInterval(self::TIMER, 0);
+        if ($this->GetBuffer('ScanPending') !== 'queued') {
+            return;
+        }
+        $this->SetBuffer('ScanPending', 'running');
+        $devices = [];
+        try {
+            $devices = $this->Discover();
+            $message = $devices === []
+                ? 'Keine Lautsprecher gefunden. Firmware ab 0.40.5 und dasselbe lokale Netz prüfen.'
+                : count($devices) . ' Lautsprecher gefunden. Wähle einen Eintrag zum Anlegen.';
+        } catch (Throwable $error) {
+            $message = 'Gerätesuche fehlgeschlagen. ' . $error->getMessage();
+        } finally {
+            $this->SetBuffer('DiscoverySnapshot', json_encode([
+                'updated' => time(), 'devices' => $devices, 'message' => $message
+            ], JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE));
+            $this->SetBuffer('ScanPending', '');
+        }
+        $this->UpdateFormField('Lautsprecher', 'values',
+            json_encode($this->DeviceRows($devices), JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE));
+        $this->UpdateFormField('DiscoveryStatus', 'caption', $message);
+    }
+
     private function DeviceRows(array $devices): array
     {
+        if ($devices === []) {
+            return [];
+        }
         $ids = [];
         $addresses = [];
         foreach (IPS_GetInstanceListByModuleID(self::DEVICE_MODULE) as $instance) {
@@ -45,6 +104,7 @@ class ESPSprachassistentDiscovery extends IPSModule
         $values = [];
         foreach ($devices as $id => $device) {
             $row = $device;
+            $row['id'] = count($values) + 1;
             $row['instanceID'] = $ids[$id] ?? $addresses[$device['ip']] ?? 0;
             $row['create'] = [
                 'moduleID' => self::DEVICE_MODULE,
@@ -66,7 +126,8 @@ class ESPSprachassistentDiscovery extends IPSModule
             throw new RuntimeException('Der UDP-Socket für die Suche konnte nicht geöffnet werden.');
         }
         try {
-            if (!@socket_bind($socket, '0.0.0.0', 0) || !@socket_set_option($socket, SOL_SOCKET, SO_BROADCAST, 1)) {
+            if (!@socket_bind($socket, '0.0.0.0', 0) || !@socket_set_nonblock($socket) ||
+                !@socket_set_option($socket, SOL_SOCKET, SO_BROADCAST, 1)) {
                 throw new RuntimeException('UDP-Broadcast steht auf diesem Symcon-Server nicht zur Verfügung.');
             }
             $nonce = random_bytes(8);
@@ -100,7 +161,8 @@ class ESPSprachassistentDiscovery extends IPSModule
                     $devices[$id] = $device;
                 }
             }
-            uasort($devices, static fn (array $a, array $b) => strnatcasecmp($a['name'], $b['name']));
+            uasort($devices, static fn (array $a, array $b) =>
+                strnatcasecmp($a['name'], $b['name']) ?: strcmp($a['ip'], $b['ip']));
             return $devices;
         } finally {
             socket_close($socket);
