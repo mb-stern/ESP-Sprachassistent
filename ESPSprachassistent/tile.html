@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Musik</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font: 1rem system-ui, sans-serif; margin: 0; padding: .75rem; color: inherit; }
+  h2, h3 { margin: 0 0 .5rem; }
+  section, form, details { margin-bottom: .7rem; }
+  details { border: 1px solid #808080; border-radius: .45rem; padding: .55rem; }
+  summary { cursor: pointer; overflow-wrap: anywhere; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .45rem 0; }
+  label.choice { display: block; padding: .2rem 0; }
+  input, button, select { font: inherit; padding: .35rem .5rem; }
+  input[type=search] { flex: 1 1 9rem; min-width: 0; }
+  button { cursor: pointer; }
+  button:disabled { cursor: default; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { border-bottom: 1px solid #80808066; padding: .4rem 0; overflow-wrap: anywhere; }
+  li small { display: block; }
+  #notice { min-height: 1.25em; margin: .4rem 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h2>Musik</h2>
+  <p id="notice" role="status">Verbindung wird geladen …</p>
+  <div id="music" hidden>
+    <details id="sourcePanel">
+      <summary id="sourceSummary">Quelle wählen</summary>
+      <div id="sources"></div>
+      <button id="saveSources" type="button">Quellen speichern</button>
+    </details>
+    <details id="targetPanel">
+      <summary id="targetSummary">Ausgabe wählen</summary>
+      <div class="row"><label for="system">System</label><select id="system"></select></div>
+      <div id="targets"></div>
+      <button id="saveTargets" type="button">Ausgabe speichern</button>
+    </details>
+    <form id="search" class="row">
+      <input id="query" type="search" required maxlength="120" placeholder="Musik oder Sender suchen" aria-label="Suchbegriff">
+      <select id="kind" aria-label="Suchen nach">
+        <option value="all">Alles</option><option value="artist">Interpret</option><option value="album">Album</option>
+        <option value="track">Titel</option><option value="station">Radiosender</option>
+      </select>
+      <button>Suchen</button>
+    </form>
+    <section id="resultsPanel" hidden aria-label="Suchergebnisse">
+      <div class="row" id="navigation"></div>
+      <ul id="results"></ul>
+      <div class="row" id="paging"></div>
+    </section>
+    <section aria-label="Aktuelle Wiedergabe">
+      <h3>Aktuelle Wiedergabe</h3>
+      <ul id="outputs"></ul>
+      <div class="row">
+        <button type="button" data-command="previous">Zurück</button><button type="button" data-command="pause">Pause</button>
+        <button type="button" data-command="resume">Weiter</button><button type="button" data-command="stop">Stopp</button>
+        <button type="button" data-command="next">Nächster</button>
+      </div>
+      <div class="row"><button type="button" id="radio">Letztes Radio</button><button type="button" id="refresh">Status aktualisieren</button></div>
+    </section>
+  </div>
+  <button type="button" id="retry" hidden>Erneut verbinden</button>
+</main>
+<script>
+'use strict';
+const el = id => document.getElementById(id);
+const session = Math.random().toString(36).slice(2);
+let sequence = 0, pending = null, busy = false, state = null, views = [], sourceBase = [];
+
+function handleMessage(message) {
+    if (!pending || !message || message.request_id !== pending.id) return;
+    const {resolve, reject, timer} = pending;
+    pending = null;
+    clearTimeout(timer);
+    if (message.error) reject(new Error(message.error));
+    else resolve(message.result);
+}
+
+function send(action, fields = {}) {
+    return new Promise((resolve, reject) => {
+        const id = session + '-' + (++sequence);
+        const timer = setTimeout(() => {
+            pending = null;
+            reject(new Error('Keine Antwort vom Modul. Bitte Status prüfen.'));
+        }, 26000);
+        pending = {id, resolve, reject, timer};
+        try {
+            requestAction('Music', JSON.stringify({action, request_id: id, ...fields}));
+        } catch (error) {
+            clearTimeout(timer);
+            pending = null;
+            reject(error);
+        }
+    });
+}
+
+function notice(text) { el('notice').textContent = text; }
+
+async function run(operation, showProgress = true) {
+    if (busy) return;
+    busy = true;
+    document.querySelector('main').setAttribute('aria-busy', 'true');
+    if (showProgress) notice('Bitte warten …');
+    try {
+        await operation();
+    } catch (error) {
+        notice(error.message || 'Musikanfrage fehlgeschlagen.');
+        if (!state) el('retry').hidden = false;
+    } finally {
+        busy = false;
+        document.querySelector('main').setAttribute('aria-busy', 'false');
+    }
+}
+
+function button(text, action) {
+    const control = document.createElement('button');
+    control.type = 'button';
+    control.textContent = text;
+    control.addEventListener('click', action);
+    return control;
+}
+
+function choices(container, rows, selected) {
+    container.replaceChildren();
+    for (const row of rows) {
+        const label = document.createElement('label');
+        label.className = 'choice';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.value = row.id;
+        input.checked = selected.includes(row.id);
+        input.disabled = row.available === false;
+        label.append(input, ' ' + row.name + (input.disabled ? ' · nicht erreichbar' : ''));
+        container.append(label);
+    }
+}
+
+function checked(id) {
+    return [...el(id).querySelectorAll('input:checked:not(:disabled)')].map(input => input.value);
+}
+
+function systemFor(target) {
+    if (target.provider === 'lms') return 'lms:' + target.server_url;
+    if (target.provider === 'bose') return 'bose:' + target.id;
+    return target.provider;
+}
+
+function renderTargets() {
+    const systems = new Map();
+    for (const target of state.targets) {
+        const key = systemFor(target);
+        const source = state.sources.find(item => item.provider === 'lms' && item.url === target.server_url);
+        const label = {esp: 'Dieser ESP', sonos: 'Sonos', bose: target.name,
+            lms: source ? 'LMS · ' + source.name : 'LMS · ' + target.name}[target.provider];
+        systems.set(key, label || target.name);
+    }
+    el('system').replaceChildren(...[...systems].map(([id, label]) => new Option(label, id)));
+    const last = state.targets.find(target => state.target_ids.includes(target.id));
+    if (last) el('system').value = systemFor(last);
+    drawTargetChoices();
+}
+
+function drawTargetChoices() {
+    choices(el('targets'), state.targets.filter(target => systemFor(target) === el('system').value), state.target_ids);
+}
+
+function selectionLabel(rows, selected) {
+    return selected.map(id => rows.find(row => row.id === id)?.name || 'Nicht verfügbar').join(' + ') || 'Bitte wählen';
+}
+
+function renderState(next) {
+    state = next;
+    el('sourceSummary').textContent = 'Quelle · ' + selectionLabel(state.sources, state.source_ids);
+    el('targetSummary').textContent = 'Ausgabe · ' + selectionLabel(state.targets, state.target_ids);
+    if (!el('sourcePanel').open) choices(el('sources'), state.sources, state.source_ids);
+    if (!el('targetPanel').open) renderTargets();
+    renderOutputs(state.outputs);
+    el('music').hidden = !state.enabled;
+    el('retry').hidden = state.enabled;
+}
+
+function renderOutputs(outputs) {
+    const list = el('outputs');
+    list.replaceChildren();
+    const labels = {playing: 'Spielt', buffering: 'Lädt', paused: 'Pausiert'};
+    for (const item of outputs.filter(row => row.status_known && Object.hasOwn(labels, row.state))) {
+        const row = document.createElement('li');
+        row.textContent = [item.target_name, item.stale ? 'Zuletzt: ' + labels[item.state] : labels[item.state],
+            item.station, item.title, item.artist, item.album, item.radio_text].filter(Boolean).join(' · ');
+        list.append(row);
+    }
+    if (!list.children.length) {
+        const row = document.createElement('li');
+        row.textContent = 'Keine laufende Wiedergabe gemeldet.';
+        list.append(row);
+    }
+}
+
+async function connect(background = false) {
+    try {
+        const next = await send('state');
+        renderState(next);
+        if (!background || !state.enabled) notice(state.enabled ? '' : 'Musik zuerst im Webinterface des ESP einschalten.');
+    } catch (error) {
+        state = null;
+        el('music').hidden = true;
+        el('retry').hidden = false;
+        throw error;
+    }
+}
+
+function play(item, shuffle) {
+    run(async () => {
+        if (!state.target_ids.length) {
+            el('targetPanel').open = true;
+            throw new Error('Bitte zuerst eine Ausgabe speichern.');
+        }
+        const result = await send('play', {id: item.id, kind: item.kind, source_id: item.source_id, shuffle,
+            target_ids: state.target_ids});
+        notice(result.message);
+    });
+}
+
+function browse(item) {
+    return {action: 'browse', id: item.id, kind: item.kind, source_id: item.source_id, title: item.title, offset: 0};
+}
+
+async function loadViews(nextViews) {
+    const view = nextViews[nextViews.length - 1];
+    const data = await send(view.action, view);
+    views = nextViews;
+    el('resultsPanel').hidden = false;
+    const nav = el('navigation');
+    nav.replaceChildren();
+    if (views.length > 1) nav.append(button('Zurück zu den Treffern', () => run(() => loadViews(views.slice(0, -1)))));
+    if (view.action === 'browse') {
+        const heading = document.createElement('strong');
+        heading.textContent = view.title;
+        nav.append(heading, button('Abspielen', () => play(view, false)), button('Zufällig abspielen', () => play(view, true)));
+    }
+    const results = el('results');
+    results.replaceChildren();
+    for (const item of data.results) {
+        const row = document.createElement('li'), title = document.createElement('strong'), info = document.createElement('small');
+        const container = item.kind === 'artist' || item.kind === 'album';
+        const label = {artist: 'Interpret', album: 'Album', track: 'Titel', station: 'Radio'}[item.kind];
+        title.textContent = item.title;
+        info.textContent = [label, item.artist, item.album, item.source_name].filter(Boolean).join(' · ');
+        row.append(container ? button(item.title, () => run(() => loadViews([...views, browse(item)]))) : title,
+            info, button('Abspielen', () => play(item, false)));
+        if (container) row.append(' ', button('Zufällig', () => play(item, true)));
+        results.append(row);
+    }
+    const pages = el('paging');
+    pages.replaceChildren();
+    const page = offset => run(() => loadViews([...views.slice(0, -1), {...view, offset}]));
+    if (view.offset > 0) pages.append(button('Vorige Seite', () => page(Math.max(0, view.offset - data.page_size))));
+    if (data.has_more) pages.append(button('Weitere Treffer', () => page(view.offset + data.page_size)));
+    const errors = data.source_errors.map(item => (item.source_name || item.source_id || 'Quelle') + ' · ' + item.error);
+    notice([data.results.length ? '' : 'Keine Treffer gefunden.', ...errors].filter(Boolean).join(' '));
+}
+
+el('sourcePanel').addEventListener('toggle', () => {
+    if (!el('sourcePanel').open || !state) return;
+    sourceBase = [...state.source_ids];
+    choices(el('sources'), state.sources, sourceBase);
+});
+el('targetPanel').addEventListener('toggle', () => {
+    if (el('targetPanel').open && state) renderTargets();
+});
+el('system').addEventListener('change', drawTargetChoices);
+el('saveSources').addEventListener('click', () => run(async () => {
+    const next = await send('sources', {source_ids: checked('sources'), expected_sources: sourceBase});
+    el('sourcePanel').open = false;
+    renderState(next);
+    notice('Quellen gespeichert.');
+}));
+el('saveTargets').addEventListener('click', () => run(async () => {
+    const next = await send('targets', {target_ids: checked('targets')});
+    el('targetPanel').open = false;
+    renderState(next);
+    notice('Ausgabe gespeichert.');
+}));
+el('search').addEventListener('submit', event => {
+    event.preventDefault();
+    run(async () => {
+        if (!state.source_ids.length) {
+            el('sourcePanel').open = true;
+            throw new Error('Bitte zuerst eine Suchquelle speichern.');
+        }
+        const kind = state.source_ids.length === 1 && state.source_ids[0] === 'radio' ? 'station' : el('kind').value;
+        await loadViews([{action: 'search', query: el('query').value.trim(), kind, source_ids: state.source_ids, offset: 0}]);
+    });
+});
+for (const control of document.querySelectorAll('[data-command]')) {
+    control.addEventListener('click', () => run(async () => {
+        const result = await send('control', {command: control.dataset.command});
+        notice(result.message);
+    }));
+}
+el('radio').addEventListener('click', () => run(async () => notice((await send('radio')).message)));
+el('refresh').addEventListener('click', () => run(async () => {
+    const result = await send('refresh');
+    renderOutputs(result.outputs);
+    notice(result.complete ? 'Status aktualisiert.' : 'Status teilweise aktualisiert.');
+}));
+el('retry').addEventListener('click', () => run(() => connect()));
+const start = () => run(() => connect());
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+else start();
+setInterval(() => {
+    if (state && !document.hidden && !el('sourcePanel').open && !el('targetPanel').open) run(() => connect(true), false);
+}, 15000);
+</script>
+</body>
+</html>

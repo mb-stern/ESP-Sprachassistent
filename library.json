@@ -1,0 +1,12 @@
+{
+  "id": "{57C711D9-7650-4667-84BD-63649BA19D69}",
+  "name": "ESP Sprachassistent",
+  "author": "mb-stern",
+  "url": "https://github.com/mb-stern/ESP-Sprachassistent",
+  "compatibility": {
+    "version": "7.1"
+  },
+  "version": "0.1",
+  "build": 1,
+  "date": 1794009600
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://www.symcon.de/assets/files/validation/moduleSchema.json",
+  "id": "{AC4EC68E-0577-4D25-B53E-C43E9857FC74}",
+  "name": "ESPSprachassistent",
+  "type": 3,
+  "vendor": "",
+  "aliases": ["ESP-Sprachassistent"],
+  "url": "https://github.com/mb-stern/ESP-Sprachassistent",
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "ESPVOICE"
+}

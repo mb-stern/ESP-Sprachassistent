@@ -1,0 +1,10 @@
+{
+  "elements": [
+    {"type": "ValidationTextBox", "name": "Address", "caption": "Lokale Adresse des ESP-Lautsprechers"},
+    {"type": "PasswordTextBox", "name": "WebPassword", "caption": "Web-Passwort des ESP (optional)"},
+    {"type": "Label", "caption": "Beispiel: http://192.168.1.50. Musikquellen und Ausgabefreigaben werden im Webinterface des ESP eingerichtet."}
+  ],
+  "actions": [
+    {"type": "Button", "caption": "Gespeicherte Verbindung prüfen", "onClick": "echo ESPVOICE_TestConnection($id);"}
+  ]
+}
