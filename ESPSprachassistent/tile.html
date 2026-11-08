@@ -402,9 +402,9 @@ el('search').addEventListener('submit', event => {
 });
 for (const control of document.querySelectorAll('[data-command]')) {
     control.addEventListener('click', () => run(async () => {
-        const result = await send('control', {command: control.dataset.command});
-        notice(result.message);
-    }));
+        await send('control', {command: control.dataset.command});
+        notice('');
+    }, false));
 }
 el('playResult').addEventListener('click', () => {
     if (selectedResult) play(selectedResult, false);
