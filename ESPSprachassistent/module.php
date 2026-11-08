@@ -35,6 +35,9 @@ class ESPSprachassistent extends IPSModule
     {
         try {
             $state = $this->ReadMusicState();
+            if (!$state['enabled']) {
+                return 'Verbindung erfolgreich. Die Musiksuche ist auf dem ESP ausgeschaltet.';
+            }
             return sprintf('Verbindung erfolgreich. %d Quellen und %d freigegebene Wiedergabeziele.',
                 count($state['sources']), count($state['targets']));
         } catch (RuntimeException $error) {
@@ -154,8 +157,12 @@ class ESPSprachassistent extends IPSModule
         if (!is_array($sources['servers'] ?? null) || !is_array($targets['targets'] ?? null)) {
             throw new RuntimeException('Die Firmware liefert keine kompatible Musik-Schnittstelle.');
         }
+        $enabled = $sources['enabled'] ?? $status['music_settings']['enabled'] ?? null;
+        if (!is_bool($enabled)) {
+            throw new RuntimeException('Der ESP meldet derzeit keinen gültigen Status der Musiksuche.');
+        }
         return [
-            'enabled' => ($status['music_settings']['enabled'] ?? false) === true,
+            'enabled' => $enabled,
             'sources' => $this->Pick($sources['servers'], ['id', 'name', 'provider', 'url']),
             'source_ids' => $sources['default_sources'] ?? [],
             'targets' => $this->Pick(array_filter($targets['targets'], static fn ($target) =>

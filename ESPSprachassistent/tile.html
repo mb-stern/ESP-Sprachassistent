@@ -243,8 +243,11 @@ function renderOutputs(outputs) {
 async function connect(background = false) {
     try {
         const next = await send('state');
+        const wasDisabled = state?.enabled === false;
         renderState(next);
-        if (!background || !state.enabled) notice(state.enabled ? '' : 'Musik zuerst im Webinterface des ESP einschalten.');
+        if (!background || wasDisabled || !state.enabled) {
+            notice(state.enabled ? '' : 'Musik zuerst im Webinterface des ESP einschalten.');
+        }
     } catch (error) {
         state = null;
         el('music').hidden = true;
