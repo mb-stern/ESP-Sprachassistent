@@ -49,6 +49,30 @@
   ul { list-style: none; padding: 0; margin: 0; }
   li { border-bottom: 1px solid var(--tile-border); padding: .4rem 0; overflow-wrap: anywhere; }
   li small { display: block; }
+  .result {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: .5rem;
+    padding: .3rem 0;
+  }
+  .result input { accent-color: var(--tile-accent); }
+  .result-title { font-weight: 600; }
+  button.result-title {
+    padding: 0;
+    border: 0;
+    background: none;
+    text-align: start;
+    text-decoration: underline;
+  }
+  .result small:empty { display: none; }
+  #resultActions {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: .35rem 0;
+    background: var(--tile-surface);
+  }
   #notice { min-height: 1.25em; margin: .4rem 0; }
   #notice:empty { display: none; }
   [hidden] { display: none !important; }
@@ -58,6 +82,15 @@
 <main aria-label="Musik">
   <p id="notice" role="status">Verbindung wird geladen …</p>
   <div id="music" hidden>
+    <section aria-label="Aktuelle Wiedergabe">
+      <h3>Aktuelle Wiedergabe</h3>
+      <ul id="outputs"></ul>
+      <div class="row">
+        <button type="button" data-command="previous">Zurück</button><button type="button" data-command="pause">Pause</button>
+        <button type="button" data-command="resume">Weiter</button><button type="button" data-command="stop">Stopp</button>
+        <button type="button" data-command="next">Nächster</button>
+      </div>
+    </section>
     <details id="sourcePanel">
       <summary id="sourceSummary">Quelle wählen</summary>
       <div id="sources"></div>
@@ -79,18 +112,12 @@
     </form>
     <section id="resultsPanel" hidden aria-label="Suchergebnisse">
       <div class="row" id="navigation"></div>
+      <div class="row" id="resultActions" hidden>
+        <button type="button" id="playResult" disabled>Auswahl abspielen</button>
+        <button type="button" id="shuffleResult" disabled>Zufällig abspielen</button>
+      </div>
       <ul id="results"></ul>
       <div class="row" id="paging"></div>
-    </section>
-    <section aria-label="Aktuelle Wiedergabe">
-      <h3>Aktuelle Wiedergabe</h3>
-      <ul id="outputs"></ul>
-      <div class="row">
-        <button type="button" data-command="previous">Zurück</button><button type="button" data-command="pause">Pause</button>
-        <button type="button" data-command="resume">Weiter</button><button type="button" data-command="stop">Stopp</button>
-        <button type="button" data-command="next">Nächster</button>
-      </div>
-      <div class="row"><button type="button" id="radio">Letztes Radio</button><button type="button" id="refresh">Status aktualisieren</button></div>
     </section>
   </div>
   <button type="button" id="retry" hidden>Erneut verbinden</button>
@@ -100,6 +127,7 @@
 const el = id => document.getElementById(id);
 const session = Math.random().toString(36).slice(2);
 let sequence = 0, pending = null, busy = false, state = null, views = [], sourceBase = [];
+let selectedResult = null;
 
 function handleMessage(message) {
     if (typeof message === 'string') {
@@ -243,9 +271,9 @@ function renderOutputs(outputs) {
 async function connect(background = false) {
     try {
         const next = await send('state');
-        const wasDisabled = state?.enabled === false;
+        const wasUnavailable = !state?.enabled;
         renderState(next);
-        if (!background || wasDisabled || !state.enabled) {
+        if (!background || wasUnavailable || !state.enabled) {
             notice(state.enabled ? '' : 'Musik zuerst im Webinterface des ESP einschalten.');
         }
     } catch (error) {
@@ -273,6 +301,50 @@ function browse(item) {
     return {action: 'browse', id: item.id, kind: item.kind, source_id: item.source_id, title: item.title, offset: 0};
 }
 
+function canBrowse(item) {
+    return item.kind === 'artist' || item.kind === 'album';
+}
+
+function renderResults(items) {
+    selectedResult = null;
+    el('resultActions').hidden = items.length === 0;
+    el('playResult').disabled = true;
+    el('shuffleResult').disabled = true;
+    const results = el('results');
+    results.replaceChildren();
+    for (const [index, item] of items.entries()) {
+        const browsable = canBrowse(item);
+        const row = document.createElement('li');
+        row.className = 'result';
+        const choice = document.createElement('input');
+        choice.type = 'radio';
+        choice.id = 'result-' + index;
+        choice.name = 'musicResult';
+        choice.setAttribute('aria-label', item.title + ' auswählen');
+        choice.addEventListener('change', () => {
+            selectedResult = item;
+            el('playResult').disabled = false;
+            el('shuffleResult').disabled = !browsable;
+        });
+
+        const details = document.createElement('div');
+        const title = browsable
+            ? button(item.title, () => run(() => loadViews([...views, browse(item)])))
+            : document.createElement('label');
+        if (!browsable) {
+            title.htmlFor = choice.id;
+            title.textContent = item.title;
+        }
+        title.className = 'result-title';
+        const info = document.createElement('small');
+        const kind = {artist: 'Interpret', album: 'Album', track: 'Titel', station: 'Radio'}[item.kind];
+        info.textContent = [kind, item.artist, item.album, item.source_name].filter(value => value && value !== item.title).join(' · ');
+        details.append(title, info);
+        row.append(choice, details);
+        results.append(row);
+    }
+}
+
 async function loadViews(nextViews) {
     const view = nextViews[nextViews.length - 1];
     const data = await send(view.action, view);
@@ -286,19 +358,7 @@ async function loadViews(nextViews) {
         heading.textContent = view.title;
         nav.append(heading, button('Abspielen', () => play(view, false)), button('Zufällig abspielen', () => play(view, true)));
     }
-    const results = el('results');
-    results.replaceChildren();
-    for (const item of data.results) {
-        const row = document.createElement('li'), title = document.createElement('strong'), info = document.createElement('small');
-        const container = item.kind === 'artist' || item.kind === 'album';
-        const label = {artist: 'Interpret', album: 'Album', track: 'Titel', station: 'Radio'}[item.kind];
-        title.textContent = item.title;
-        info.textContent = [label, item.artist, item.album, item.source_name].filter(Boolean).join(' · ');
-        row.append(container ? button(item.title, () => run(() => loadViews([...views, browse(item)]))) : title,
-            info, button('Abspielen', () => play(item, false)));
-        if (container) row.append(' ', button('Zufällig', () => play(item, true)));
-        results.append(row);
-    }
+    renderResults(data.results);
     const pages = el('paging');
     pages.replaceChildren();
     const page = offset => run(() => loadViews([...views.slice(0, -1), {...view, offset}]));
@@ -346,19 +406,21 @@ for (const control of document.querySelectorAll('[data-command]')) {
         notice(result.message);
     }));
 }
-el('radio').addEventListener('click', () => run(async () => notice((await send('radio')).message)));
-el('refresh').addEventListener('click', () => run(async () => {
-    const result = await send('refresh');
-    renderOutputs(result.outputs);
-    notice(result.complete ? 'Status aktualisiert.' : 'Status teilweise aktualisiert.');
-}));
+el('playResult').addEventListener('click', () => {
+    if (selectedResult) play(selectedResult, false);
+});
+el('shuffleResult').addEventListener('click', () => {
+    if (selectedResult && canBrowse(selectedResult)) play(selectedResult, true);
+});
 el('retry').addEventListener('click', () => run(() => connect()));
 const start = () => run(() => connect());
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
 else start();
-setInterval(() => {
-    if (state && !document.hidden && !el('sourcePanel').open && !el('targetPanel').open) run(() => connect(true), false);
-}, 15000);
+function pollPlayback() {
+    if (!document.hidden) run(() => connect(true), false);
+}
+document.addEventListener('visibilitychange', pollPlayback);
+setInterval(pollPlayback, 10000);
 </script>
 </body>
 </html>

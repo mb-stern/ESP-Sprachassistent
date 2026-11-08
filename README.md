@@ -30,8 +30,8 @@ Die Kachelvisualisierung setzt Symcon 7.1 oder neuer und die Musik-Webschnittste
 ## Bedienung
 
 - Eine oder mehrere Suchquellen speichern und die Suche bei Bedarf auf Interpret, Album, Titel oder Radiosender eingrenzen. Interpret und Album öffnen die nächste Ebene. Alben und Interpreten lassen sich auch zufällig abspielen.
-- Freigegebene Ausgaben eines Systems auswählen. Die Firmware prüft die Gruppierung und führt die Wiedergabe aus. **Letztes Radio** verwendet Sender und Ausgabe der letzten Radiowiedergabe.
-- Die Kachel zeigt die vom ESP gemeldeten laufenden Wiedergaben. **Status aktualisieren** fragt die Ausgabegeräte über den ESP neu ab.
+- Freigegebene Ausgaben eines Systems auswählen. Die Firmware prüft die Gruppierung und führt die Wiedergabe aus.
+- **Aktuelle Wiedergabe** steht oben. Die geöffnete Kachel liest den vom ESP gemeldeten Status alle zehn Sekunden. In der Trefferliste einen Eintrag auswählen und über die gemeinsamen Schaltflächen abspielen.
 
 Für Symcon-Skripte stehen `ESPVOICE_PlayRadio($InstanzID)` und `ESPVOICE_ControlPlayback($InstanzID, 'stop')` zur Verfügung. Weitere Steuerbefehle sind `pause`, `resume`, `previous` und `next`.
 
