@@ -66,6 +66,8 @@
     text-decoration: underline;
   }
   .result small:empty { display: none; }
+  .result-group h4 { margin: .6rem 0 .15rem; }
+  .result-group > button { margin-top: .35rem; }
   #resultActions {
     position: sticky;
     top: 0;
@@ -116,8 +118,7 @@
         <button type="button" id="playResult" disabled>Auswahl abspielen</button>
         <button type="button" id="shuffleResult" disabled>Zufällig abspielen</button>
       </div>
-      <ul id="results"></ul>
-      <div class="row" id="paging"></div>
+      <div id="results"></div>
     </section>
   </div>
   <button type="button" id="retry" hidden>Erneut verbinden</button>
@@ -125,6 +126,7 @@
 <script>
 'use strict';
 const el = id => document.getElementById(id);
+const resultKinds = [['album', 'Alben'], ['artist', 'Interpreten'], ['track', 'Titel'], ['station', 'Radiosender']];
 const session = Math.random().toString(36).slice(2);
 let sequence = 0, pending = null, busy = false, state = null, views = [], sourceBase = [];
 let selectedResult = null;
@@ -298,27 +300,21 @@ function play(item, shuffle) {
 }
 
 function browse(item) {
-    return {action: 'browse', id: item.id, kind: item.kind, source_id: item.source_id, title: item.title, offset: 0};
+    return {action: 'browse', id: item.id, kind: item.kind, source_id: item.source_id, title: item.title};
 }
 
 function canBrowse(item) {
     return item.kind === 'artist' || item.kind === 'album';
 }
 
-function renderResults(items) {
-    selectedResult = null;
-    el('resultActions').hidden = items.length === 0;
-    el('playResult').disabled = true;
-    el('shuffleResult').disabled = true;
-    const results = el('results');
-    results.replaceChildren();
-    for (const [index, item] of items.entries()) {
+function appendResults(list, items) {
+    for (const item of items) {
         const browsable = canBrowse(item);
         const row = document.createElement('li');
         row.className = 'result';
         const choice = document.createElement('input');
         choice.type = 'radio';
-        choice.id = 'result-' + index;
+        choice.id = 'result-' + item.kind + '-' + list.children.length;
         choice.name = 'musicResult';
         choice.setAttribute('aria-label', item.title + ' auswählen');
         choice.addEventListener('change', () => {
@@ -337,35 +333,102 @@ function renderResults(items) {
         }
         title.className = 'result-title';
         const info = document.createElement('small');
-        const kind = {artist: 'Interpret', album: 'Album', track: 'Titel', station: 'Radio'}[item.kind];
-        info.textContent = [kind, item.artist, item.album, item.source_name].filter(value => value && value !== item.title).join(' · ');
+        info.textContent = [item.artist, item.album, item.source_name].filter(value => value && value !== item.title).join(' · ');
         details.append(title, info);
         row.append(choice, details);
-        results.append(row);
+        list.append(row);
+    }
+}
+
+function sourcesForKind(sources, kind) {
+    if (kind === 'all') return sources;
+    return sources.filter(source => (source === 'radio') === (kind === 'station'));
+}
+
+async function requestResultPage(view, offset) {
+    if (view.action === 'browse') {
+        return send('browse', {id: view.id, kind: view.kind, source_id: view.source_id, offset});
+    }
+    const sources = sourcesForKind(view.source_ids, view.kind);
+    if (!sources.length) throw new Error('Bitte zuerst eine passende Suchquelle wählen.');
+    return send('search', {query: view.query, kind: view.kind, source_ids: sources, offset});
+}
+
+function resultNotice(page, hasItems) {
+    const errors = page.source_errors.map(item => (item.source_name || item.source_id || 'Quelle') + ' · ' + item.error);
+    notice([hasItems ? '' : 'Keine Treffer gefunden.', ...errors].filter(Boolean).join(' '));
+}
+
+function morePagesAvailable(page) {
+    return page.nextOffset <= 10000 && (page.has_more || page.source_errors.length > 0);
+}
+
+function rememberPage(page, offset) {
+    return {...page, nextOffset: page.source_errors.length ? offset : offset + page.page_size};
+}
+
+function renderResults(view) {
+    const page = view.page;
+    const overview = view.action === 'search' && view.kind === 'all';
+    const focusedKind = view.action === 'browse' ? (view.kind === 'artist' ? 'album' : 'track') : view.kind;
+    selectedResult = null;
+    el('resultActions').hidden = page.results.length === 0;
+    el('playResult').disabled = true;
+    el('shuffleResult').disabled = true;
+    const results = el('results');
+    results.replaceChildren();
+    for (const [kind, label] of resultKinds) {
+        if (overview ? !sourcesForKind(view.source_ids, kind).length : kind !== focusedKind) continue;
+        const group = document.createElement('section');
+        group.className = 'result-group';
+        const heading = document.createElement('h4');
+        heading.textContent = label;
+        const list = document.createElement('ul');
+        appendResults(list, page.results.filter(item => item.kind === kind));
+        const more = button('Mehr anzeigen', () => run(async () => {
+            if (overview) {
+                await loadViews([...views, {action: 'search', query: view.query, kind, source_ids: view.source_ids}]);
+                return;
+            }
+            const offset = view.page.nextOffset;
+            const next = rememberPage(await requestResultPage(view, offset), offset);
+            const key = item => JSON.stringify([item.source_id, item.id]);
+            const seen = new Set(view.page.results.map(key));
+            const added = next.results.filter(item => {
+                const id = key(item);
+                if (item.kind !== kind || seen.has(id)) return false;
+                seen.add(id);
+                return true;
+            });
+            view.page = {...next, results: [...view.page.results, ...added]};
+            appendResults(list, added);
+            more.hidden = !morePagesAvailable(view.page);
+            el('resultActions').hidden = !view.page.results.length;
+            resultNotice(view.page, view.page.results.length > 0);
+        }));
+        more.setAttribute('aria-label', 'Mehr anzeigen: ' + label);
+        more.hidden = !overview && !morePagesAvailable(page);
+        group.append(heading, list, more);
+        results.append(group);
     }
 }
 
 async function loadViews(nextViews) {
     const view = nextViews[nextViews.length - 1];
-    const data = await send(view.action, view);
+    if (!view.page) view.page = rememberPage(await requestResultPage(view, 0), 0);
     views = nextViews;
     el('resultsPanel').hidden = false;
     const nav = el('navigation');
     nav.replaceChildren();
-    if (views.length > 1) nav.append(button('Zurück zu den Treffern', () => run(() => loadViews(views.slice(0, -1)))));
+    if (views.length > 1) nav.append(button(view.action === 'search' ? 'Zurück zur Übersicht' : 'Zurück zu den Treffern',
+        () => run(() => loadViews(views.slice(0, -1)))));
     if (view.action === 'browse') {
         const heading = document.createElement('strong');
         heading.textContent = view.title;
         nav.append(heading, button('Abspielen', () => play(view, false)), button('Zufällig abspielen', () => play(view, true)));
     }
-    renderResults(data.results);
-    const pages = el('paging');
-    pages.replaceChildren();
-    const page = offset => run(() => loadViews([...views.slice(0, -1), {...view, offset}]));
-    if (view.offset > 0) pages.append(button('Vorige Seite', () => page(Math.max(0, view.offset - data.page_size))));
-    if (data.has_more) pages.append(button('Weitere Treffer', () => page(view.offset + data.page_size)));
-    const errors = data.source_errors.map(item => (item.source_name || item.source_id || 'Quelle') + ' · ' + item.error);
-    notice([data.results.length ? '' : 'Keine Treffer gefunden.', ...errors].filter(Boolean).join(' '));
+    renderResults(view);
+    resultNotice(view.page, view.page.results.length > 0);
 }
 
 el('sourcePanel').addEventListener('toggle', () => {
@@ -397,7 +460,7 @@ el('search').addEventListener('submit', event => {
             throw new Error('Bitte zuerst eine Suchquelle speichern.');
         }
         const kind = state.source_ids.length === 1 && state.source_ids[0] === 'radio' ? 'station' : el('kind').value;
-        await loadViews([{action: 'search', query: el('query').value.trim(), kind, source_ids: state.source_ids, offset: 0}]);
+        await loadViews([{action: 'search', query: el('query').value.trim(), kind, source_ids: state.source_ids}]);
     });
 });
 for (const control of document.querySelectorAll('[data-command]')) {
