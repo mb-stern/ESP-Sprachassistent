@@ -59,6 +59,7 @@
   .playing { display: flex; align-items: center; gap: .65rem; }
   .room { margin-bottom: .45rem; padding: .5rem; border: 1px solid var(--tile-border); border-radius: .4rem; }
   .playing img { width: 3rem; height: 3rem; object-fit: cover; border-radius: .25rem; }
+  .playing img.station-logo { width: 4.5rem; max-width: 20vw; object-fit: contain; }
   .cover-button { flex: none; padding: 0; border: 0; background: none; }
   .cover-button img { display: block; }
   #playbackDetail, #playbackDetailRoom { display: flex; flex: 1; flex-direction: column; margin: 0; }
@@ -421,6 +422,7 @@ function renderOutputs(outputs, force = false) {
         const cover = coverFor(item);
         if (ongoing && cover) {
             const image = coverImage(cover, '');
+            if (item.station) image.classList.add('station-logo');
             const coverElement = item.target_id ? button('', () => openPlaybackDetail(item, cover)) : image;
             if (coverElement !== image) {
                 coverElement.className = 'cover-button';
