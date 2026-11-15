@@ -23,6 +23,13 @@
     background-color: var(--tile-surface);
   }
   main { padding: .65rem; }
+  main.playback-open {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 3.3rem);
+    height: calc(100dvh - 3.3rem);
+    overflow: auto;
+  }
   h3 { margin: 0 0 .5rem; }
   section, form, details { margin-bottom: .7rem; }
   details { border: 1px solid var(--tile-border); border-radius: .45rem; padding: .55rem; }
@@ -52,6 +59,28 @@
   .playing { display: flex; align-items: center; gap: .65rem; }
   .room { margin-bottom: .45rem; padding: .5rem; border: 1px solid var(--tile-border); border-radius: .4rem; }
   .playing img { width: 3rem; height: 3rem; object-fit: cover; border-radius: .25rem; }
+  .cover-button { flex: none; padding: 0; border: 0; background: none; }
+  .cover-button img { display: block; }
+  #playbackDetail, #playbackDetailRoom { display: flex; flex: 1; flex-direction: column; margin: 0; }
+  #playbackDetailBar { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
+  #playbackDetailTitle { margin: 0; overflow-wrap: anywhere; }
+  #closePlaybackDetail { flex: none; min-width: 2.5rem; min-height: 2.5rem; font-size: 1.45rem; line-height: 1; }
+  .room-detail { display: flex; flex: 1; flex-direction: column; justify-content: center; gap: clamp(.65rem, 2vw, 1.5rem); padding: .6rem 0; }
+  .room-detail-info { min-width: 0; overflow-wrap: anywhere; }
+  .room-detail-summary { margin: 0 0 .55rem; }
+  .detail-cover {
+    align-self: center;
+    width: 100%;
+    height: min(45vh, 30rem);
+    height: min(45dvh, 30rem);
+    object-fit: contain;
+    border-radius: .4rem;
+  }
+  @media (min-width: 520px) and (min-aspect-ratio: 1/1) {
+    .room-detail { flex-direction: row; align-items: center; }
+    .room-detail-info { flex: 1; }
+    .detail-cover { flex: 0 1 50%; width: 50%; height: min(70vh, 36rem); height: min(70dvh, 36rem); }
+  }
   .room-volume { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem .4rem; margin: .35rem 0; }
   .room-volume input { grid-column: 1 / -1; margin: 0; padding: 0; accent-color: var(--tile-accent); }
   .result {
@@ -90,7 +119,7 @@
   <p id="notice" role="status">Verbindung wird geladen …</p>
   <div id="music" hidden>
     <section aria-label="Aktuelle Wiedergabe">
-      <h3>Aktuelle Wiedergabe</h3>
+      <h3 id="playbackOverviewTitle" tabindex="-1">Aktuelle Wiedergabe</h3>
       <ul id="outputs"></ul>
       <details id="otherOutputsPanel" hidden><summary>Andere freigegebene Geräte</summary><ul id="otherOutputs"></ul></details>
     </section>
@@ -124,6 +153,13 @@
     </section>
     </div>
   </div>
+  <section id="playbackDetail" aria-labelledby="playbackDetailTitle" hidden>
+    <div id="playbackDetailBar">
+      <h3 id="playbackDetailTitle"></h3>
+      <button type="button" id="closePlaybackDetail" aria-label="Detailansicht schliessen" title="Schliessen">×</button>
+    </div>
+    <div id="playbackDetailRoom"></div>
+  </section>
   <button type="button" id="retry" hidden>Erneut verbinden</button>
 </main>
 <script>
@@ -135,7 +171,14 @@ let sequence = 0, busy = false, state = null, views = [], sourceBase = [];
 const pending = new Map();
 const covers = new Map(), coverRetry = new Map();
 let coverLoading = false, cardBusy = 0, sliderEditingUntil = 0, outputSignature = '';
+let playbackDetail = null;
 let selectedResult = null;
+const outputLabels = {playing: 'Spielt', buffering: 'Lädt', paused: 'Pausiert',
+    stopped: 'Gestoppt', unavailable: 'Nicht erreichbar', error: 'Wiedergabefehler'};
+
+function isOngoing(item) {
+    return item.status_known && ['playing', 'buffering', 'paused'].includes(item.state);
+}
 
 function handleMessage(message) {
     if (typeof message === 'string') {
@@ -256,49 +299,146 @@ function renderState(next) {
     if (!el('targetPanel').open) renderTargets();
     renderOutputs(state.outputs);
     setTimeout(loadCover, 0);
-    el('music').hidden = false;
+    showPlaybackView();
     el('musicSearch').hidden = !state.enabled;
     el('retry').hidden = true;
     el('retry').textContent = 'Status erneut laden';
 }
 
-function renderOutputs(outputs) {
+function showPlaybackView() {
+    const expanded = !!state && !!playbackDetail;
+    document.querySelector('main').classList.toggle('playback-open', expanded);
+    el('music').hidden = !state || expanded;
+    el('playbackDetail').hidden = !expanded;
+}
+
+function openPlaybackDetail(item, cover) {
+    playbackDetail = {targetId: item.target_id, name: item.target_name, cover, scroll: window.scrollY};
+    showPlaybackView();
+    renderOutputs(state.outputs, true);
+    el('closePlaybackDetail').focus();
+}
+
+function closePlaybackDetail() {
+    if (!playbackDetail) return;
+    const {targetId, scroll} = playbackDetail;
+    playbackDetail = null;
+    el('playbackDetailRoom').replaceChildren();
+    showPlaybackView();
+    if (!state) {
+        el('retry').focus();
+        return;
+    }
+    renderOutputs(state.outputs, true);
+    const opener = [...el('outputs').querySelectorAll('.cover-button')].find(button => button.dataset.targetId === targetId);
+    (opener || el('playbackOverviewTitle')).focus({preventScroll: true});
+    window.scrollTo(0, scroll);
+    setTimeout(loadCover, 0);
+}
+
+function coverFor(item) {
+    return covers.get(item.cover) || (typeof item.cover === 'string' &&
+        /^https:\/\/[a-z][a-z0-9.-]*\.[a-z]{2,}(?=[:/])/i.test(item.cover) ? item.cover : '');
+}
+
+function coverImage(src, label) {
+    const image = document.createElement('img');
+    image.alt = label;
+    image.referrerPolicy = 'no-referrer';
+    image.src = src;
+    return image;
+}
+
+function roomDescription(item) {
+    const label = outputLabels[item.state] || 'Status unbekannt';
+    return [(item.stale && item.status_known ? 'Zuletzt: ' : '') + label,
+        item.station, item.title, item.artist, item.album, item.radio_text].filter(Boolean).join(' · ');
+}
+
+function canControl(item) {
+    return item.state !== 'unavailable' &&
+        (item.allowed ?? state.targets.some(target => target.id === item.target_id));
+}
+
+function renderPlaybackDetail(item, cover) {
+    const destination = el('playbackDetailRoom');
+    const previousFocus = destination.contains(document.activeElement) && document.activeElement.getAttribute('aria-label');
+    const name = item?.target_name || playbackDetail.name || 'Wiedergabeziel';
+    el('playbackDetailTitle').textContent = name;
+    const article = document.createElement('article');
+    article.className = 'room-detail';
+    if (cover) {
+        const image = coverImage(cover, 'Cover · ' + name);
+        image.className = 'detail-cover';
+        image.addEventListener('error', () => image.remove(), {once: true});
+        article.append(image);
+    }
+    const info = document.createElement('div');
+    info.className = 'room-detail-info';
+    const summary = document.createElement('p');
+    summary.className = 'room-detail-summary';
+    summary.textContent = item ? roomDescription(item) : 'Nicht erreichbar';
+    info.append(summary);
+    if (item && canControl(item)) appendRoomControls(info, item);
+    article.append(info);
+    destination.replaceChildren(article);
+    if (previousFocus) {
+        const control = [...destination.querySelectorAll('[aria-label]')].find(el => el.getAttribute('aria-label') === previousFocus);
+        (control || el('closePlaybackDetail')).focus({preventScroll: true});
+    }
+}
+
+function renderOutputs(outputs, force = false) {
+    if (!force && (cardBusy || Date.now() < sliderEditingUntil)) return;
+    if (playbackDetail) {
+        const item = outputs.find(row => row.target_id === playbackDetail.targetId);
+        const currentCover = item && coverFor(item);
+        if (currentCover) playbackDetail.cover = currentCover;
+        const cover = currentCover || (!item || ['stopped', 'unavailable'].includes(item.state) ? playbackDetail.cover : '');
+        const signature = JSON.stringify([playbackDetail.targetId, item, !!cover]);
+        if (force || signature !== outputSignature) {
+            outputSignature = signature;
+            renderPlaybackDetail(item, cover);
+        }
+        return;
+    }
     const list = el('outputs');
     const other = el('otherOutputs');
     const signature = JSON.stringify(outputs.map(item => [item, covers.has(item.cover)]));
-    if (cardBusy || Date.now() < sliderEditingUntil || signature === outputSignature) return;
+    if (!force && signature === outputSignature) return;
     outputSignature = signature;
     list.replaceChildren();
     other.replaceChildren();
-    const labels = {playing: 'Spielt', buffering: 'Lädt', paused: 'Pausiert'};
     for (const item of outputs) {
-        const ongoing = item.status_known && Object.hasOwn(labels, item.state);
+        const ongoing = isOngoing(item);
         const allowed = item.allowed ?? state.targets.some(target => target.id === item.target_id);
         if (!ongoing && !allowed) continue;
         const row = document.createElement('li');
         row.className = 'room';
         const header = document.createElement('div');
         header.className = 'playing';
-        const cover = covers.get(item.cover) || (typeof item.cover === 'string' && /^https:\/\/[a-z][a-z0-9.-]*\.[a-z]{2,}(?=[:/])/i.test(item.cover) ? item.cover : '');
+        const cover = coverFor(item);
         if (ongoing && cover) {
-            const image = document.createElement('img');
-            image.alt = '';
-            image.referrerPolicy = 'no-referrer';
-            image.addEventListener('error', () => image.remove(), {once: true});
-            image.src = cover;
-            header.append(image);
+            const image = coverImage(cover, '');
+            const coverElement = item.target_id ? button('', () => openPlaybackDetail(item, cover)) : image;
+            if (coverElement !== image) {
+                coverElement.className = 'cover-button';
+                coverElement.dataset.targetId = item.target_id;
+                coverElement.setAttribute('aria-label', 'Wiedergabe vergrössern · ' + (item.target_name || 'Wiedergabeziel'));
+                coverElement.append(image);
+            }
+            image.addEventListener('error', () => coverElement.remove(), {once: true});
+            header.append(coverElement);
         }
         const text = document.createElement('span');
         const name = document.createElement('strong');
         name.textContent = item.target_name || 'Wiedergabeziel';
         const description = document.createElement('small');
-        const label = labels[item.state] || {stopped: 'Gestoppt', unavailable: 'Nicht erreichbar', error: 'Wiedergabefehler'}[item.state] || 'Status unbekannt';
-        description.textContent = [(item.stale && item.status_known ? 'Zuletzt: ' : '') + label,
-            item.station, item.title, item.artist, item.album, item.radio_text].filter(Boolean).join(' · ');
+        description.textContent = roomDescription(item);
         text.append(name, description);
         header.append(text);
         row.append(header);
-        if (allowed && item.state !== 'unavailable') appendRoomControls(row, item);
+        if (canControl(item)) appendRoomControls(row, item);
         (ongoing ? list : other).append(row);
     }
     el('otherOutputsPanel').hidden = !other.children.length;
@@ -311,7 +451,8 @@ function renderOutputs(outputs) {
 
 async function loadCover() {
     if (coverLoading || !state || state.voice_active || document.hidden) return;
-    const wanted = state.outputs.find(item => item.status_known && ['playing', 'paused'].includes(item.state)
+    const wanted = state.outputs.find(item => (!playbackDetail || playbackDetail.targetId === item.target_id)
+        && item.status_known && ['playing', 'paused'].includes(item.state)
         && typeof item.cover === 'string' && /^\/art\/[a-f0-9]{32}$/.test(item.cover)
         && !covers.has(item.cover) && (coverRetry.get(item.cover) || 0) < Date.now());
     if (!wanted) return;
@@ -422,7 +563,7 @@ async function connect(background = false) {
     } catch (error) {
         state = null;
         outputSignature = '';
-        el('music').hidden = true;
+        showPlaybackView();
         el('retry').hidden = false;
         el('retry').textContent = 'Erneut verbinden';
         throw error;
@@ -612,6 +753,10 @@ el('shuffleResult').addEventListener('click', () => {
     if (selectedResult && canBrowse(selectedResult)) play(selectedResult, true);
 });
 el('retry').addEventListener('click', () => run(() => connect()));
+el('closePlaybackDetail').addEventListener('click', closePlaybackDetail);
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && playbackDetail) closePlaybackDetail();
+});
 const start = () => run(() => connect());
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
 else start();

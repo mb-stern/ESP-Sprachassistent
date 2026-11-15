@@ -33,6 +33,7 @@ Die Kachelvisualisierung setzt Symcon 7.1 oder neuer und die Musik-Webschnittste
 - Freigegebene Ausgaben eines Systems auswählen. Die Firmware prüft die Gruppierung und führt die Wiedergabe aus.
 - **Aktuelle Wiedergabe** steht oben. Die geöffnete Kachel liest den vom ESP gemeldeten Status alle zehn Sekunden. In der Trefferliste einen Eintrag auswählen und über die gemeinsamen Schaltflächen abspielen.
 - Die Kachel zeigt ab Firmware Beta 0.50.4 verfügbare Cover unter **Aktuelle Wiedergabe**. Solange der ESP ein aktives Gespräch meldet, wartet sie mit neuen Cover-Anfragen an den ESP. Ab Beta 0.50.5 stehen Lautstärke und Wiedergabebefehle direkt beim jeweiligen freigegebenen Gerät, auch bei Wiedergabe aus einer anderen App. Bei Sonos und LMS betrifft der Transport die angezeigte Gruppe, wenn alle zugehörigen Geräte freigegeben sind.
+- Ein Klick aufs Cover öffnet die Detailansicht für diesen Lautsprecher über die ganze Kachel. Das Schliesskreuz oder Escape führt zurück zur Übersicht.
 - **Alles** zeigt die Treffer nach Alben, Interpreten, Titeln und Radiosendern. **Mehr anzeigen** öffnet die gewählte Rubrik und lädt dort weitere Treffer nach.
 
 Für Symcon-Skripte stehen `ESPVOICE_PlayRadio($InstanzID)` und `ESPVOICE_ControlPlayback($InstanzID, 'stop')` zur Verfügung. Weitere Steuerbefehle sind `pause`, `resume`, `previous` und `next`.
