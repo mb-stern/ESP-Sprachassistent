@@ -113,7 +113,15 @@ class ESPSprachassistent extends IPSModule
                     'action' => 'transport', 'target_id' => $id, 'command' => $command, 'grouped' => $grouped
                 ]);
             case 'refresh':
-                $status = $this->Api('/api/music/targets', ['action' => 'status', 'target_ids' => []]);
+                $target = isset($request['target_id']) ? $this->Text($request['target_id']) : null;
+                if ($target === 'esp') {
+                    $outputs = $this->ReadMusicState(4)['outputs'];
+                    return ['outputs' => array_values(array_filter($outputs,
+                        static fn (array $row) => ($row['target_id'] ?? null) === 'esp')), 'complete' => true];
+                }
+                $status = $this->Api('/api/music/targets', [
+                    'action' => 'status', 'target_ids' => $target === null ? [] : [$target]
+                ], $target === null ? 22 : 4);
                 return ['outputs' => $this->PublicOutputs($status['outputs'] ?? []),
                     'complete' => ($status['complete'] ?? false) === true];
             case 'sources':
@@ -175,9 +183,9 @@ class ESPSprachassistent extends IPSModule
         }
     }
 
-    private function ReadMusicState(): array
+    private function ReadMusicState(int $timeout = 22): array
     {
-        $status = $this->Api('/api/status');
+        $status = $this->Api('/api/status', null, $timeout);
         $sources = $status['music_settings']['sources'] ?? null;
         $targets = $status['music_targets'] ?? null;
         if (!is_array($sources['servers'] ?? null) || !is_array($targets['targets'] ?? null)) {
@@ -301,7 +309,7 @@ class ESPSprachassistent extends IPSModule
         return $mime === '' ? '' : 'data:' . $mime . ';base64,' . base64_encode($data);
     }
 
-    private function Api(string $path, ?array $payload = null): array
+    private function Api(string $path, ?array $payload = null, int $timeout = 22): array
     {
         $ip = $this->Ip();
         if (!function_exists('curl_init')) {
@@ -313,7 +321,7 @@ class ESPSprachassistent extends IPSModule
             throw new RuntimeException('Verbindung zum ESP konnte nicht vorbereitet werden.');
         }
         $options = [
-            CURLOPT_RETURNTRANSFER => true, CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_TIMEOUT => 22,
+            CURLOPT_RETURNTRANSFER => true, CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_TIMEOUT => $timeout,
             CURLOPT_FOLLOWLOCATION => false, CURLOPT_PROXY => '',
             CURLOPT_HTTPHEADER => ['Accept: application/json', 'Content-Type: application/json', 'X-Home-Voice: 1']
         ];

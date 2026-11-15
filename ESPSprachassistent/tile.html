@@ -171,6 +171,7 @@ let sequence = 0, busy = false, state = null, views = [], sourceBase = [];
 const pending = new Map();
 const covers = new Map(), coverRetry = new Map();
 let coverLoading = false, cardBusy = 0, sliderEditingUntil = 0, outputSignature = '';
+let playbackRevision = 0, skipRefresh = false, preferredCover = '';
 let playbackDetail = null;
 let selectedResult = null;
 const outputLabels = {playing: 'Spielt', buffering: 'Lädt', paused: 'Pausiert',
@@ -450,11 +451,12 @@ function renderOutputs(outputs, force = false) {
 }
 
 async function loadCover() {
-    if (coverLoading || !state || state.voice_active || document.hidden) return;
-    const wanted = state.outputs.find(item => (!playbackDetail || playbackDetail.targetId === item.target_id)
+    if (coverLoading || cardBusy || skipRefresh || !state || state.voice_active || document.hidden) return;
+    const candidates = state.outputs.filter(item => (!playbackDetail || playbackDetail.targetId === item.target_id)
         && item.status_known && ['playing', 'paused'].includes(item.state)
         && typeof item.cover === 'string' && /^\/art\/[a-f0-9]{32}$/.test(item.cover)
         && !covers.has(item.cover) && (coverRetry.get(item.cover) || 0) < Date.now());
+    const wanted = candidates.find(item => item.target_id === preferredCover) || candidates[0];
     if (!wanted) return;
     const ref = wanted.cover;
     coverLoading = true;
@@ -472,6 +474,37 @@ async function loadCover() {
     } finally {
         coverLoading = false;
         setTimeout(loadCover, 150);
+    }
+}
+
+async function refreshAfterSkip(previous, revision) {
+    const media = ({title, artist, album, station, radio_text, cover}) =>
+        JSON.stringify([title, artist, album, station, radio_text, cover]);
+    const before = media(previous);
+    const deadline = Date.now() + 3000;
+    try {
+        for (const delay of [250, 500, 900]) {
+            await new Promise(resolve => setTimeout(resolve, delay));
+            if (revision !== playbackRevision || !state || document.hidden || Date.now() > deadline) return;
+            let reply;
+            try {
+                reply = await send('refresh', {target_id: previous.target_id});
+            } catch {
+                continue;
+            }
+            if (revision !== playbackRevision || !state) return;
+            const item = reply?.outputs?.find(row => row.target_id === previous.target_id);
+            if (!item?.status_known || item.stale === true ||
+                (item.state === previous.state && media(item) === before) ||
+                item.state === 'buffering') continue;
+            state.outputs = state.outputs.map(row => row.target_id === item.target_id ? item : row);
+            preferredCover = item.target_id;
+            renderOutputs(state.outputs);
+            setTimeout(loadCover, 0);
+            return;
+        }
+    } finally {
+        if (revision === playbackRevision) skipRefresh = false;
     }
 }
 
@@ -532,10 +565,14 @@ function appendRoomControls(card, item) {
     for (const [command, label] of commands) {
         const control = button(label, async () => {
             if (cardBusy) return;
+            const revision = ++playbackRevision;
+            const skip = command === 'next' || command === 'previous';
+            skipRefresh = false;
             cardBusy++;
             control.disabled = true;
             try {
                 await send('transport', {target_id: item.target_id, command, grouped: item.grouped === true, legacy: item.card_transport !== true});
+                skipRefresh = skip;
                 notice('');
             } catch (error) {
                 notice(error.message);
@@ -543,7 +580,8 @@ function appendRoomControls(card, item) {
                 cardBusy--;
                 control.disabled = false;
                 outputSignature = '';
-                pollPlayback();
+                if (skipRefresh) void refreshAfterSkip(item, revision);
+                else pollPlayback();
             }
         });
         control.setAttribute('aria-label', label + ' · ' + name);
@@ -553,14 +591,17 @@ function appendRoomControls(card, item) {
 }
 
 async function connect(background = false) {
+    const revision = playbackRevision;
     try {
         const next = await send('state');
+        if (background && revision !== playbackRevision) return;
         const before = state?.enabled;
         renderState(next);
         if (!background || before !== state.enabled) {
             notice(state.enabled ? '' : 'Für die Musiksuche Musik im ESP-Webinterface aktivieren.');
         }
     } catch (error) {
+        if (background && revision !== playbackRevision) return;
         state = null;
         outputSignature = '';
         showPlaybackView();
@@ -576,6 +617,8 @@ function play(item, shuffle) {
             el('targetPanel').open = true;
             throw new Error('Bitte zuerst eine Ausgabe speichern.');
         }
+        playbackRevision++;
+        skipRefresh = false;
         const result = await send('play', {id: item.id, kind: item.kind, source_id: item.source_id, shuffle,
             target_ids: state.target_ids});
         notice(result.message);
@@ -761,7 +804,7 @@ const start = () => run(() => connect());
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
 else start();
 function pollPlayback() {
-    if (!document.hidden) run(() => connect(true), false);
+    if (!document.hidden && !cardBusy && !skipRefresh) run(() => connect(true), false);
 }
 document.addEventListener('visibilitychange', pollPlayback);
 setInterval(pollPlayback, 10000);
