@@ -86,6 +86,32 @@ class ESPSprachassistent extends IPSModule
         switch ($request['action'] ?? '') {
             case 'state':
                 return $this->ReadMusicState();
+            case 'volume':
+                $id = $this->Text($request['target_id'] ?? null);
+                $volume = $request['volume'] ?? null;
+                if (!is_int($volume) || $volume < 0 || $volume > ($id === 'esp' ? 80 : 100)) {
+                    throw new RuntimeException('Ungültige Lautstärke.');
+                }
+                return $this->Api('/api/music/targets', [
+                    'action' => 'volume', 'target_id' => $id, 'volume' => $volume
+                ]);
+            case 'cover':
+                return ['image' => $this->ReadCover($this->Text($request['ref'] ?? null))];
+            case 'transport':
+                $id = $this->Text($request['target_id'] ?? null);
+                $command = $request['command'] ?? '';
+                $grouped = $request['grouped'] ?? false;
+                if (!in_array($command, ['start', 'stop', 'pause', 'previous', 'next'], true) || !is_bool($grouped)) {
+                    throw new RuntimeException('Ungültiger Wiedergabebefehl.');
+                }
+                if (($request['legacy'] ?? false) === true) {
+                    return $this->Api('/api/music/control', [
+                        'action' => $command === 'start' ? 'resume' : $command, 'target_ids' => [$id]
+                    ]);
+                }
+                return $this->Api('/api/music/targets', [
+                    'action' => 'transport', 'target_id' => $id, 'command' => $command, 'grouped' => $grouped
+                ]);
             case 'refresh':
                 $status = $this->Api('/api/music/targets', ['action' => 'status', 'target_ids' => []]);
                 return ['outputs' => $this->PublicOutputs($status['outputs'] ?? []),
@@ -163,6 +189,7 @@ class ESPSprachassistent extends IPSModule
         }
         return [
             'enabled' => $enabled,
+            'voice_active' => ($status['active'] ?? false) === true,
             'sources' => $this->Pick($sources['servers'], ['id', 'name', 'provider', 'url']),
             'source_ids' => $sources['default_sources'] ?? [],
             'targets' => $this->Pick(array_filter($targets['targets'], static fn ($target) =>
@@ -185,8 +212,9 @@ class ESPSprachassistent extends IPSModule
 
     private function PublicOutputs(array $outputs): array
     {
-        return $this->Pick($outputs, ['target_name', 'state', 'title', 'artist', 'album',
-            'station', 'radio_text', 'status_known', 'stale']);
+        return $this->Pick($outputs, ['target_id', 'target_name', 'state', 'title', 'artist',
+            'album', 'station', 'radio_text', 'status_known', 'stale', 'allowed', 'cover',
+            'volume', 'volume_max', 'grouped', 'queue_count', 'card_transport']);
     }
 
     private function Pick(array $rows, array $keys): array
@@ -226,13 +254,56 @@ class ESPSprachassistent extends IPSModule
         return array_values(array_unique(array_map(fn ($id) => $this->Text($id), $value)));
     }
 
-    private function Api(string $path, ?array $payload = null): array
+    private function Ip(): string
     {
         $address = preg_replace('~\Ahttp://~i', '', trim($this->ReadPropertyString('Address')));
         $ip = preg_replace('~(?::80)?/?\z~', '', $address);
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
             throw new RuntimeException('Bitte die lokale IPv4-Adresse des ESP speichern, zum Beispiel http://192.168.1.50.');
         }
+        return $ip;
+    }
+
+    private function ReadCover(string $ref): string
+    {
+        if (!function_exists('curl_init')) {
+            return '';
+        }
+        if (!preg_match('~\A/art/[0-9a-f]{32}\z~', $ref)) {
+            throw new RuntimeException('Ungültige Cover-Referenz.');
+        }
+        $data = '';
+        $client = curl_init('http://' . $this->Ip() . ':8767' . $ref);
+        if ($client === false) {
+            return '';
+        }
+        curl_setopt_array($client, [
+            CURLOPT_FOLLOWLOCATION => false, CURLOPT_PROXY => '', CURLOPT_CONNECTTIMEOUT_MS => 800,
+            CURLOPT_TIMEOUT_MS => 4500,
+            CURLOPT_WRITEFUNCTION => static function ($client, string $chunk) use (&$data): int {
+                if (strlen($data) + strlen($chunk) > 196608) {
+                    return 0;
+                }
+                $data .= $chunk;
+                return strlen($chunk);
+            }
+        ]);
+        if (curl_exec($client) !== true || curl_getinfo($client, CURLINFO_RESPONSE_CODE) !== 200) {
+            return '';
+        }
+        $mime = match (true) {
+            str_starts_with($data, "\xff\xd8\xff") => 'image/jpeg',
+            str_starts_with($data, "\x89PNG\r\n\x1a\n") => 'image/png',
+            str_starts_with($data, 'GIF87a'), str_starts_with($data, 'GIF89a') => 'image/gif',
+            str_starts_with($data, 'RIFF') && substr($data, 8, 4) === 'WEBP' => 'image/webp',
+            default => ''
+        };
+        return $mime === '' ? '' : 'data:' . $mime . ';base64,' . base64_encode($data);
+    }
+
+    private function Api(string $path, ?array $payload = null): array
+    {
+        $ip = $this->Ip();
         if (!function_exists('curl_init')) {
             throw new RuntimeException('Die PHP-cURL-Erweiterung von Symcon ist nicht verfügbar.');
         }

@@ -49,6 +49,11 @@
   ul { list-style: none; padding: 0; margin: 0; }
   li { border-bottom: 1px solid var(--tile-border); padding: .4rem 0; overflow-wrap: anywhere; }
   li small { display: block; }
+  .playing { display: flex; align-items: center; gap: .65rem; }
+  .room { margin-bottom: .45rem; padding: .5rem; border: 1px solid var(--tile-border); border-radius: .4rem; }
+  .playing img { width: 3rem; height: 3rem; object-fit: cover; border-radius: .25rem; }
+  .room-volume { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem .4rem; margin: .35rem 0; }
+  .room-volume input { grid-column: 1 / -1; margin: 0; padding: 0; accent-color: var(--tile-accent); }
   .result {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -87,12 +92,9 @@
     <section aria-label="Aktuelle Wiedergabe">
       <h3>Aktuelle Wiedergabe</h3>
       <ul id="outputs"></ul>
-      <div class="row">
-        <button type="button" data-command="previous">Zurück</button><button type="button" data-command="pause">Pause</button>
-        <button type="button" data-command="resume">Weiter</button><button type="button" data-command="stop">Stopp</button>
-        <button type="button" data-command="next">Nächster</button>
-      </div>
+      <details id="otherOutputsPanel" hidden><summary>Andere freigegebene Geräte</summary><ul id="otherOutputs"></ul></details>
     </section>
+    <div id="musicSearch">
     <details id="sourcePanel">
       <summary id="sourceSummary">Quelle wählen</summary>
       <div id="sources"></div>
@@ -120,6 +122,7 @@
       </div>
       <div id="results"></div>
     </section>
+    </div>
   </div>
   <button type="button" id="retry" hidden>Erneut verbinden</button>
 </main>
@@ -128,7 +131,10 @@
 const el = id => document.getElementById(id);
 const resultKinds = [['album', 'Alben'], ['artist', 'Interpreten'], ['track', 'Titel'], ['station', 'Radiosender']];
 const session = Math.random().toString(36).slice(2);
-let sequence = 0, pending = null, busy = false, state = null, views = [], sourceBase = [];
+let sequence = 0, busy = false, state = null, views = [], sourceBase = [];
+const pending = new Map();
+const covers = new Map(), coverRetry = new Map();
+let coverLoading = false, cardBusy = 0, sliderEditingUntil = 0, outputSignature = '';
 let selectedResult = null;
 
 function handleMessage(message) {
@@ -139,9 +145,10 @@ function handleMessage(message) {
             return;
         }
     }
-    if (!pending || !message || message.request_id !== pending.id) return;
-    const {resolve, reject, timer} = pending;
-    pending = null;
+    const reply = message && pending.get(message.request_id);
+    if (!reply) return;
+    const {resolve, reject, timer} = reply;
+    pending.delete(message.request_id);
     clearTimeout(timer);
     if (message.error) reject(new Error(message.error));
     else resolve(message.result);
@@ -151,15 +158,15 @@ function send(action, fields = {}) {
     return new Promise((resolve, reject) => {
         const id = session + '-' + (++sequence);
         const timer = setTimeout(() => {
-            pending = null;
+            pending.delete(id);
             reject(new Error('Keine Antwort vom Modul. Bitte Status prüfen.'));
         }, 26000);
-        pending = {id, resolve, reject, timer};
+        pending.set(id, {resolve, reject, timer});
         try {
             requestAction('Music', JSON.stringify({action, request_id: id, ...fields}));
         } catch (error) {
             clearTimeout(timer);
-            pending = null;
+            pending.delete(id);
             reject(error);
         }
     });
@@ -248,21 +255,53 @@ function renderState(next) {
     if (!el('sourcePanel').open) choices(el('sources'), state.sources, state.source_ids);
     if (!el('targetPanel').open) renderTargets();
     renderOutputs(state.outputs);
-    el('music').hidden = !state.enabled;
-    el('retry').hidden = state.enabled;
+    setTimeout(loadCover, 0);
+    el('music').hidden = false;
+    el('musicSearch').hidden = !state.enabled;
+    el('retry').hidden = true;
     el('retry').textContent = 'Status erneut laden';
 }
 
 function renderOutputs(outputs) {
     const list = el('outputs');
+    const other = el('otherOutputs');
+    const signature = JSON.stringify(outputs.map(item => [item, covers.has(item.cover)]));
+    if (cardBusy || Date.now() < sliderEditingUntil || signature === outputSignature) return;
+    outputSignature = signature;
     list.replaceChildren();
+    other.replaceChildren();
     const labels = {playing: 'Spielt', buffering: 'Lädt', paused: 'Pausiert'};
-    for (const item of outputs.filter(row => row.status_known && Object.hasOwn(labels, row.state))) {
+    for (const item of outputs) {
+        const ongoing = item.status_known && Object.hasOwn(labels, item.state);
+        const allowed = item.allowed ?? state.targets.some(target => target.id === item.target_id);
+        if (!ongoing && !allowed) continue;
         const row = document.createElement('li');
-        row.textContent = [item.target_name, item.stale ? 'Zuletzt: ' + labels[item.state] : labels[item.state],
+        row.className = 'room';
+        const header = document.createElement('div');
+        header.className = 'playing';
+        const cover = covers.get(item.cover) || (typeof item.cover === 'string' && /^https:\/\/[a-z][a-z0-9.-]*\.[a-z]{2,}(?=[:/])/i.test(item.cover) ? item.cover : '');
+        if (ongoing && cover) {
+            const image = document.createElement('img');
+            image.alt = '';
+            image.referrerPolicy = 'no-referrer';
+            image.addEventListener('error', () => image.remove(), {once: true});
+            image.src = cover;
+            header.append(image);
+        }
+        const text = document.createElement('span');
+        const name = document.createElement('strong');
+        name.textContent = item.target_name || 'Wiedergabeziel';
+        const description = document.createElement('small');
+        const label = labels[item.state] || {stopped: 'Gestoppt', unavailable: 'Nicht erreichbar', error: 'Wiedergabefehler'}[item.state] || 'Status unbekannt';
+        description.textContent = [(item.stale && item.status_known ? 'Zuletzt: ' : '') + label,
             item.station, item.title, item.artist, item.album, item.radio_text].filter(Boolean).join(' · ');
-        list.append(row);
+        text.append(name, description);
+        header.append(text);
+        row.append(header);
+        if (allowed && item.state !== 'unavailable') appendRoomControls(row, item);
+        (ongoing ? list : other).append(row);
     }
+    el('otherOutputsPanel').hidden = !other.children.length;
     if (!list.children.length) {
         const row = document.createElement('li');
         row.textContent = 'Keine laufende Wiedergabe gemeldet.';
@@ -270,16 +309,119 @@ function renderOutputs(outputs) {
     }
 }
 
+async function loadCover() {
+    if (coverLoading || !state || state.voice_active || document.hidden) return;
+    const wanted = state.outputs.find(item => item.status_known && ['playing', 'paused'].includes(item.state)
+        && typeof item.cover === 'string' && /^\/art\/[a-f0-9]{32}$/.test(item.cover)
+        && !covers.has(item.cover) && (coverRetry.get(item.cover) || 0) < Date.now());
+    if (!wanted) return;
+    const ref = wanted.cover;
+    coverLoading = true;
+    try {
+        const reply = await send('cover', {ref});
+        if (typeof reply.image !== 'string' || !/^data:image\/(jpeg|png|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(reply.image)) {
+            throw new Error('Cover noch nicht verfügbar.');
+        }
+        if (covers.size >= 16) covers.delete(covers.keys().next().value);
+        covers.set(ref, reply.image);
+        if (state) renderOutputs(state.outputs);
+    } catch {
+        if (coverRetry.size >= 32) coverRetry.delete(coverRetry.keys().next().value);
+        coverRetry.set(ref, Date.now() + 30000);
+    } finally {
+        coverLoading = false;
+        setTimeout(loadCover, 150);
+    }
+}
+
+function appendRoomControls(card, item) {
+    const name = item.target_name || 'Wiedergabeziel';
+    if (Number.isInteger(item.volume) && Number.isInteger(item.volume_max)) {
+        const row = document.createElement('label');
+        const slider = document.createElement('input');
+        const value = document.createElement('output');
+        row.className = 'room-volume';
+        slider.type = 'range';
+        slider.min = '0';
+        slider.max = String(item.volume_max);
+        slider.value = String(item.volume);
+        slider.setAttribute('aria-label', 'Lautstärke ' + name);
+        let confirmed = item.volume;
+        const show = () => { value.textContent = slider.value + ' %'; };
+        show();
+        slider.addEventListener('input', show);
+        slider.addEventListener('pointerdown', () => { sliderEditingUntil = Date.now() + 15000; });
+        for (const event of ['pointerup', 'pointercancel', 'blur']) {
+            slider.addEventListener(event, () => { sliderEditingUntil = 0; });
+        }
+        slider.addEventListener('change', async () => {
+            cardBusy++;
+            slider.disabled = true;
+            try {
+                const reply = await send('volume', {target_id: item.target_id, volume: Number(slider.value)});
+                confirmed = reply.volume;
+            } catch (error) {
+                notice(error.message || 'Lautstärke konnte nicht geändert werden.');
+            } finally {
+                slider.value = String(confirmed);
+                show();
+                slider.disabled = false;
+                cardBusy--;
+                sliderEditingUntil = 0;
+                outputSignature = '';
+            }
+        });
+        row.append('Lautstärke', value, slider);
+        card.append(row);
+    }
+    if (!item.status_known || !item.target_id) return;
+    const group = document.createElement('div');
+    group.className = 'row';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', item.grouped ? 'Wiedergabesteuerung für die Gruppe von ' + name : 'Wiedergabesteuerung ' + name);
+    const playing = item.state === 'playing' || item.state === 'buffering';
+    const canStart = item.target_id !== 'esp' || item.queue_count > 0;
+    const commands = playing ? [['previous', 'Zurück'], ['pause', 'Pause'], ['stop', 'Stopp'], ['next', 'Nächster']]
+        : item.state === 'paused' ? [['start', 'Weiter'], ['stop', 'Stopp']] : canStart ? [['start', 'Start']] : [];
+    if (item.grouped && commands.length) {
+        const scope = document.createElement('small');
+        scope.textContent = 'Wiedergabe für die ganze Gruppe';
+        card.append(scope);
+    }
+    for (const [command, label] of commands) {
+        const control = button(label, async () => {
+            if (cardBusy) return;
+            cardBusy++;
+            control.disabled = true;
+            try {
+                await send('transport', {target_id: item.target_id, command, grouped: item.grouped === true, legacy: item.card_transport !== true});
+                notice('');
+            } catch (error) {
+                notice(error.message);
+            } finally {
+                cardBusy--;
+                control.disabled = false;
+                outputSignature = '';
+                pollPlayback();
+            }
+        });
+        control.setAttribute('aria-label', label + ' · ' + name);
+        group.append(control);
+    }
+    if (commands.length) card.append(group);
+}
+
 async function connect(background = false) {
     try {
         const next = await send('state');
-        const wasUnavailable = !state?.enabled;
+        const before = state?.enabled;
         renderState(next);
-        if (!background || wasUnavailable || !state.enabled) {
-            notice(state.enabled ? '' : 'Musik zuerst im Webinterface des ESP einschalten.');
+        if (!background || before !== state.enabled) {
+            notice(state.enabled ? '' : 'Für die Musiksuche Musik im ESP-Webinterface aktivieren.');
         }
     } catch (error) {
         state = null;
+        outputSignature = '';
         el('music').hidden = true;
         el('retry').hidden = false;
         el('retry').textContent = 'Erneut verbinden';
@@ -463,12 +605,6 @@ el('search').addEventListener('submit', event => {
         await loadViews([{action: 'search', query: el('query').value.trim(), kind, source_ids: state.source_ids}]);
     });
 });
-for (const control of document.querySelectorAll('[data-command]')) {
-    control.addEventListener('click', () => run(async () => {
-        await send('control', {command: control.dataset.command});
-        notice('');
-    }, false));
-}
 el('playResult').addEventListener('click', () => {
     if (selectedResult) play(selectedResult, false);
 });
