@@ -822,7 +822,7 @@ function pollPlayback() {
     if (!document.hidden && !cardBusy && !playbackRefreshPending) run(() => connect(true), false);
 }
 document.addEventListener('visibilitychange', pollPlayback);
-setInterval(pollPlayback, 10000);
+setInterval(pollPlayback, 5000);
 </script>
 </body>
 </html>

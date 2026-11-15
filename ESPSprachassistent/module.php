@@ -289,7 +289,7 @@ class ESPSprachassistent extends IPSModule
             CURLOPT_FOLLOWLOCATION => false, CURLOPT_PROXY => '', CURLOPT_CONNECTTIMEOUT_MS => 800,
             CURLOPT_TIMEOUT_MS => 4500,
             CURLOPT_WRITEFUNCTION => static function ($client, string $chunk) use (&$data): int {
-                if (strlen($data) + strlen($chunk) > 196608) {
+                if (strlen($data) + strlen($chunk) > 768 * 1024) {
                     return 0;
                 }
                 $data .= $chunk;
