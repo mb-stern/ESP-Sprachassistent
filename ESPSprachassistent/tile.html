@@ -186,6 +186,7 @@ const pending = new Map();
 const covers = new Map(), coverRetry = new Map();
 let coverLoading = false, cardBusy = 0, sliderEditingUntil = 0, outputSignature = '';
 let playbackRevision = 0, playbackRefreshPending = false, preferredCover = '';
+let playbackPollPending = false, retryPlaybackPollAt = 0;
 const musicPointers = new Set();
 let touchDeadline = 0, touchRelease = 0, waitingState = null;
 let playbackDetail = null;
@@ -901,14 +902,44 @@ const start = () => run(() => connect());
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
 else start();
 function pollPlayback() {
-    if (!document.hidden && !cardBusy && !playbackRefreshPending) run(() => connect(true), false);
+    if (!document.hidden && !cardBusy && !playbackRefreshPending && !playbackPollPending) {
+        run(() => connect(true), false);
+    }
 }
+
+async function pollCurrentPlayback() {
+    if (!state || document.hidden || busy || cardBusy || playbackRefreshPending ||
+        playbackPollPending || Date.now() < retryPlaybackPollAt) return;
+
+    const current = state;
+    const revision = playbackRevision;
+    playbackPollPending = true;
+    try {
+        const result = await send('playback');
+        if (result.unsupported) {
+            retryPlaybackPollAt = Date.now() + 60000;
+            return;
+        }
+        if (state !== current || revision !== playbackRevision || !Array.isArray(result.outputs)) return;
+
+        current.outputs = result.outputs;
+        if (waitingState?.revision === revision) waitingState.next.outputs = result.outputs;
+        renderOutputs(current.outputs);
+        void loadCover();
+    } catch {
+        retryPlaybackPollAt = Date.now() + 5000;
+    } finally {
+        playbackPollPending = false;
+    }
+}
+
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) releaseMusicPointers();
     else pollPlayback();
 });
 window.addEventListener('focus', pollPlayback);
 setInterval(pollPlayback, 5000);
+setInterval(pollCurrentPlayback, 1000);
 </script>
 </body>
 </html>

@@ -86,6 +86,15 @@ class ESPSprachassistent extends IPSModule
         switch ($request['action'] ?? '') {
             case 'state':
                 return $this->ReadMusicState();
+            case 'playback':
+                try {
+                    return ['outputs' => $this->PublicOutputs($this->Api('/api/music/playback', null, 3))];
+                } catch (RuntimeException $error) {
+                    if ($error->getCode() === 404) {
+                        return ['unsupported' => true];
+                    }
+                    throw $error;
+                }
             case 'volume':
                 $id = $this->Text($request['target_id'] ?? null);
                 $volume = $request['volume'] ?? null;
@@ -346,11 +355,11 @@ class ESPSprachassistent extends IPSModule
         }
         $response = json_decode($body, true);
         if (!is_array($response)) {
-            throw new RuntimeException('Die Adresse liefert keine ESP-API-Antwort.');
+            throw new RuntimeException('Die Adresse liefert keine ESP-API-Antwort.', $code);
         }
         if ($code !== 200 || isset($response['error']) || ($response['ok'] ?? true) === false) {
             $detail = $response['error'] ?? $response['message'] ?? null;
-            throw new RuntimeException(is_string($detail) && $detail !== '' ? $detail : 'Die Musikanfrage ist fehlgeschlagen.');
+            throw new RuntimeException(is_string($detail) && $detail !== '' ? $detail : 'Die Musikanfrage ist fehlgeschlagen.', $code);
         }
         return $response;
     }
