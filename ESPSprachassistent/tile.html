@@ -187,7 +187,7 @@ const covers = new Map(), coverRetry = new Map();
 let coverLoading = false, cardBusy = 0, sliderEditingUntil = 0, outputSignature = '';
 let playbackRevision = 0, playbackRefreshPending = false, preferredCover = '';
 const musicPointers = new Set();
-let touchRelease = 0, waitingState = null;
+let touchDeadline = 0, touchRelease = 0, waitingState = null;
 let playbackDetail = null;
 let selectedResult = null;
 const outputLabels = {playing: 'Spielt', buffering: 'Lädt', paused: 'Pausiert',
@@ -205,10 +205,15 @@ document.addEventListener('pointerdown', event => {
     if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
     if (!event.target.closest?.('button, input, label, select, summary')) return;
     musicPointers.add(event.pointerId);
+    clearTimeout(touchDeadline);
+    touchDeadline = setTimeout(releaseMusicPointers, 2500);
 }, true);
 
-function finishMusicPointer(event) {
-    if (!musicPointers.delete(event.pointerId) || musicPointers.size) return;
+function releaseMusicPointers() {
+    if (!musicPointers.size && !touchDeadline) return;
+    musicPointers.clear();
+    clearTimeout(touchDeadline);
+    touchDeadline = 0;
     clearTimeout(touchRelease);
     // Let the native click or change handler run on the original element.
     touchRelease = setTimeout(() => {
@@ -223,8 +228,13 @@ function finishMusicPointer(event) {
         }
     }, 140);
 }
+function finishMusicPointer(event) {
+    if (musicPointers.delete(event.pointerId) && !musicPointers.size) releaseMusicPointers();
+}
 document.addEventListener('pointerup', finishMusicPointer, true);
 document.addEventListener('pointercancel', finishMusicPointer, true);
+document.addEventListener('lostpointercapture', finishMusicPointer, true);
+window.addEventListener('blur', releaseMusicPointers);
 
 function handleMessage(message) {
     if (typeof message === 'string') {
@@ -694,12 +704,12 @@ function play(item, shuffle) {
         const previous = state.outputs.find(row => row.target_id === targetIds[0]) || {target_id: targetIds[0]};
         const result = await send('play', {id: item.id, kind: item.kind, source_id: item.source_id, shuffle,
             target_ids: targetIds});
-        notice(result.message);
+        notice(result.message === 'Wiedergabe angefordert.' ? '' : (result.message || ''));
         if (item.kind !== 'station' && revision === playbackRevision) {
             playbackRefreshPending = true;
             void refreshPlayback(previous, revision, item.kind === 'album' || !!previous.album);
         }
-    });
+    }, false);
 }
 
 function browse(item) {
@@ -891,9 +901,13 @@ const start = () => run(() => connect());
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
 else start();
 function pollPlayback() {
-    if (!document.hidden && !cardBusy && !touchInProgress() && !playbackRefreshPending) run(() => connect(true), false);
+    if (!document.hidden && !cardBusy && !playbackRefreshPending) run(() => connect(true), false);
 }
-document.addEventListener('visibilitychange', pollPlayback);
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseMusicPointers();
+    else pollPlayback();
+});
+window.addEventListener('focus', pollPlayback);
 setInterval(pollPlayback, 5000);
 </script>
 </body>
