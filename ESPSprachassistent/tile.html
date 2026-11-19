@@ -56,10 +56,12 @@
   ul { list-style: none; padding: 0; margin: 0; }
   li { border-bottom: 1px solid var(--tile-border); padding: .4rem 0; overflow-wrap: anywhere; }
   li small { display: block; }
-  .playing { display: flex; align-items: center; gap: .65rem; }
+  .playing { display: flex; align-items: center; gap: .65rem; min-height: 3rem; }
   .room { margin-bottom: .45rem; padding: .5rem; border: 1px solid var(--tile-border); border-radius: .4rem; }
   .playing img { width: 3rem; height: 3rem; object-fit: cover; border-radius: .25rem; }
   .playing img.station-logo { width: 4.5rem; max-width: 20vw; object-fit: contain; }
+  .cover-slot { display: grid; place-items: center; flex: none; width: 3rem; height: 3rem; }
+  .cover-slot.station { width: 4.5rem; max-width: 20vw; }
   .cover-button { flex: none; padding: 0; border: 0; background: none; }
   .cover-button img { display: block; }
   #playbackDetail, #playbackDetailRoom { display: flex; flex: 1; flex-direction: column; margin: 0; }
@@ -86,12 +88,14 @@
   .room-volume input { grid-column: 1 / -1; margin: 0; padding: 0; accent-color: var(--tile-accent); }
   .result {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr) var(--result-action-width, 5.8rem);
+    align-items: center;
     gap: .5rem;
     padding: .3rem 0;
   }
   .result input { accent-color: var(--tile-accent); }
+  .result-can-shuffle { --result-action-width: 8.5rem; }
+  .result-choice { display: grid; place-items: center; cursor: pointer; }
   .result-title { font-weight: 600; }
   button.result-title {
     padding: 0;
@@ -104,11 +108,20 @@
   .result-group h4 { margin: .6rem 0 .15rem; }
   .result-group > button { margin-top: .35rem; }
   #resultActions {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    padding: .35rem 0;
-    background: var(--tile-surface);
+    flex-wrap: nowrap;
+    gap: .3rem;
+    margin: 0;
+  }
+  .result-play-icon { display: none; }
+  @media (max-width: 600px) {
+    .result { --result-action-width: 3rem; }
+    .result-can-shuffle { --result-action-width: 6.3rem; }
+    .result-play-text { display: none; }
+    .result-play-icon { display: inline; }
+  }
+  @media (pointer: coarse) {
+    button, .result-choice { min-height: 48px; touch-action: manipulation; }
+    .result-choice, #resultActions button, #closePlaybackDetail { min-width: 48px; }
   }
   #notice { min-height: 1.25em; margin: .4rem 0; }
   #notice:empty { display: none; }
@@ -146,11 +159,11 @@
     </form>
     <section id="resultsPanel" hidden aria-label="Suchergebnisse">
       <div class="row" id="navigation"></div>
-      <div class="row" id="resultActions" hidden>
-        <button type="button" id="playResult" disabled>Auswahl abspielen</button>
-        <button type="button" id="shuffleResult" disabled>Zufällig abspielen</button>
-      </div>
       <div id="results"></div>
+      <div class="row" id="resultActions" role="group" aria-label="Wiedergabe der Auswahl" hidden>
+        <button type="button" id="playResult" aria-label="Auswahl abspielen" title="Auswahl abspielen" disabled><span class="result-play-text">Abspielen</span><span class="result-play-icon" aria-hidden="true">▶</span></button>
+        <button type="button" id="shuffleResult" aria-label="Auswahl zufällig abspielen" title="Auswahl zufällig abspielen" disabled>🔀</button>
+      </div>
     </section>
     </div>
   </div>
@@ -173,6 +186,8 @@ const pending = new Map();
 const covers = new Map(), coverRetry = new Map();
 let coverLoading = false, cardBusy = 0, sliderEditingUntil = 0, outputSignature = '';
 let playbackRevision = 0, playbackRefreshPending = false, preferredCover = '';
+const musicPointers = new Set();
+let touchRelease = 0, waitingState = null;
 let playbackDetail = null;
 let selectedResult = null;
 const outputLabels = {playing: 'Spielt', buffering: 'Lädt', paused: 'Pausiert',
@@ -181,6 +196,35 @@ const outputLabels = {playing: 'Spielt', buffering: 'Lädt', paused: 'Pausiert',
 function isOngoing(item) {
     return item.status_known && ['playing', 'buffering', 'paused'].includes(item.state);
 }
+
+function touchInProgress() {
+    return musicPointers.size > 0 || touchRelease !== 0;
+}
+
+document.addEventListener('pointerdown', event => {
+    if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+    if (!event.target.closest?.('button, input, label, select, summary')) return;
+    musicPointers.add(event.pointerId);
+}, true);
+
+function finishMusicPointer(event) {
+    if (!musicPointers.delete(event.pointerId) || musicPointers.size) return;
+    clearTimeout(touchRelease);
+    // Let the native click or change handler run on the original element.
+    touchRelease = setTimeout(() => {
+        touchRelease = 0;
+        if (musicPointers.size) return;
+        const waiting = waitingState;
+        waitingState = null;
+        if (waiting && waiting.revision === playbackRevision && !cardBusy) {
+            applyConnectionState(waiting.next, true);
+        } else if (state) {
+            renderOutputs(state.outputs);
+        }
+    }, 140);
+}
+document.addEventListener('pointerup', finishMusicPointer, true);
+document.addEventListener('pointercancel', finishMusicPointer, true);
 
 function handleMessage(message) {
     if (typeof message === 'string') {
@@ -369,11 +413,12 @@ function renderPlaybackDetail(item, cover) {
     el('playbackDetailTitle').textContent = name;
     const article = document.createElement('article');
     article.className = 'room-detail';
-    if (cover) {
-        const image = coverImage(cover, 'Cover · ' + name);
-        image.className = 'detail-cover';
-        image.addEventListener('error', () => image.remove(), {once: true});
-        article.append(image);
+    if (cover || item?.cover || playbackDetail.cover) {
+        const artwork = cover ? coverImage(cover, 'Cover · ' + name) : document.createElement('div');
+        artwork.className = 'detail-cover';
+        if (cover) artwork.addEventListener('error', () => { artwork.style.visibility = 'hidden'; }, {once: true});
+        else artwork.setAttribute('aria-hidden', 'true');
+        article.append(artwork);
     }
     const info = document.createElement('div');
     info.className = 'room-detail-info';
@@ -391,7 +436,7 @@ function renderPlaybackDetail(item, cover) {
 }
 
 function renderOutputs(outputs, force = false) {
-    if (!force && (cardBusy || Date.now() < sliderEditingUntil)) return;
+    if (!force && (cardBusy || touchInProgress() || Date.now() < sliderEditingUntil)) return;
     if (playbackDetail) {
         const item = outputs.find(row => row.target_id === playbackDetail.targetId);
         const currentCover = item && coverFor(item);
@@ -420,18 +465,26 @@ function renderOutputs(outputs, force = false) {
         const header = document.createElement('div');
         header.className = 'playing';
         const cover = coverFor(item);
-        if (ongoing && cover) {
-            const image = coverImage(cover, '');
-            if (item.station) image.classList.add('station-logo');
-            const coverElement = item.target_id ? button('', () => openPlaybackDetail(item, cover)) : image;
-            if (coverElement !== image) {
-                coverElement.className = 'cover-button';
-                coverElement.dataset.targetId = item.target_id;
-                coverElement.setAttribute('aria-label', 'Wiedergabe vergrössern · ' + (item.target_name || 'Wiedergabeziel'));
-                coverElement.append(image);
+        if (ongoing && item.cover) {
+            const slot = document.createElement('span');
+            slot.className = 'cover-slot';
+            slot.classList.toggle('station', !!item.station);
+            if (cover) {
+                const image = coverImage(cover, '');
+                if (item.station) image.classList.add('station-logo');
+                const coverElement = item.target_id ? button('', () => openPlaybackDetail(item, cover)) : image;
+                if (coverElement !== image) {
+                    coverElement.className = 'cover-button';
+                    coverElement.dataset.targetId = item.target_id;
+                    coverElement.setAttribute('aria-label', 'Wiedergabe vergrössern · ' + (item.target_name || 'Wiedergabeziel'));
+                    coverElement.append(image);
+                }
+                image.addEventListener('error', () => {
+                    coverElement.hidden = true;
+                }, {once: true});
+                slot.append(coverElement);
             }
-            image.addEventListener('error', () => coverElement.remove(), {once: true});
-            header.append(coverElement);
+            header.append(slot);
         }
         const text = document.createElement('span');
         const name = document.createElement('strong');
@@ -599,18 +652,27 @@ function appendRoomControls(card, item) {
     if (commands.length) card.append(group);
 }
 
+function applyConnectionState(next, background) {
+    const before = state?.enabled;
+    renderState(next);
+    if (!background || before !== state.enabled) {
+        notice(state.enabled ? '' : 'Für die Musiksuche Musik im ESP-Webinterface aktivieren.');
+    }
+}
+
 async function connect(background = false) {
     const revision = playbackRevision;
     try {
         const next = await send('state');
         if (background && revision !== playbackRevision) return;
-        const before = state?.enabled;
-        renderState(next);
-        if (!background || before !== state.enabled) {
-            notice(state.enabled ? '' : 'Für die Musiksuche Musik im ESP-Webinterface aktivieren.');
+        if (background && touchInProgress()) {
+            waitingState = {next, revision};
+            return;
         }
+        waitingState = null;
+        applyConnectionState(next, background);
     } catch (error) {
-        if (background && revision !== playbackRevision) return;
+        if (background && (state || revision !== playbackRevision)) return;
         state = null;
         outputSignature = '';
         showPlaybackView();
@@ -653,6 +715,10 @@ function appendResults(list, items) {
         const browsable = canBrowse(item);
         const row = document.createElement('li');
         row.className = 'result';
+        row.classList.toggle('result-can-shuffle', browsable);
+        const pick = document.createElement('label');
+        pick.className = 'result-choice';
+        const slot = document.createElement('div');
         const choice = document.createElement('input');
         choice.type = 'radio';
         choice.id = 'result-' + item.kind + '-' + list.children.length;
@@ -660,8 +726,12 @@ function appendResults(list, items) {
         choice.setAttribute('aria-label', item.title + ' auswählen');
         choice.addEventListener('change', () => {
             selectedResult = item;
+            const actions = el('resultActions');
+            slot.append(actions);
+            actions.hidden = false;
             el('playResult').disabled = false;
             el('shuffleResult').disabled = !browsable;
+            el('shuffleResult').hidden = !browsable;
         });
 
         const details = document.createElement('div');
@@ -676,7 +746,8 @@ function appendResults(list, items) {
         const info = document.createElement('small');
         info.textContent = [item.artist, item.album, item.source_name].filter(value => value && value !== item.title).join(' · ');
         details.append(title, info);
-        row.append(choice, details);
+        pick.append(choice);
+        row.append(pick, details, slot);
         list.append(row);
     }
 }
@@ -713,7 +784,9 @@ function renderResults(view) {
     const overview = view.action === 'search' && view.kind === 'all';
     const focusedKind = view.action === 'browse' ? (view.kind === 'artist' ? 'album' : 'track') : view.kind;
     selectedResult = null;
-    el('resultActions').hidden = page.results.length === 0;
+    const actions = el('resultActions');
+    actions.hidden = true;
+    el('resultsPanel').append(actions);
     el('playResult').disabled = true;
     el('shuffleResult').disabled = true;
     const results = el('results');
@@ -744,7 +817,6 @@ function renderResults(view) {
             view.page = {...next, results: [...view.page.results, ...added]};
             appendResults(list, added);
             more.hidden = !morePagesAvailable(view.page);
-            el('resultActions').hidden = !view.page.results.length;
             resultNotice(view.page, view.page.results.length > 0);
         }));
         more.setAttribute('aria-label', 'Mehr anzeigen: ' + label);
@@ -819,7 +891,7 @@ const start = () => run(() => connect());
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
 else start();
 function pollPlayback() {
-    if (!document.hidden && !cardBusy && !playbackRefreshPending) run(() => connect(true), false);
+    if (!document.hidden && !cardBusy && !touchInProgress() && !playbackRefreshPending) run(() => connect(true), false);
 }
 document.addEventListener('visibilitychange', pollPlayback);
 setInterval(pollPlayback, 5000);
