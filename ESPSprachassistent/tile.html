@@ -135,7 +135,6 @@
     <section aria-label="Aktuelle Wiedergabe">
       <h3 id="playbackOverviewTitle" tabindex="-1">Aktuelle Wiedergabe</h3>
       <ul id="outputs"></ul>
-      <details id="otherOutputsPanel" hidden><summary>Andere freigegebene Geräte</summary><ul id="otherOutputs"></ul></details>
     </section>
     <div id="musicSearch">
     <details id="sourcePanel">
@@ -573,23 +572,19 @@ function renderOutputs(outputs, force = false) {
         return;
     }
     const list = el('outputs');
-    const other = el('otherOutputs');
     const signature = JSON.stringify(outputs.map(item => [item, covers.has(item.cover)]));
     if (!force && signature === outputSignature) return;
     outputSignature = signature;
     list.replaceChildren();
-    other.replaceChildren();
     for (const members of groups) {
         const item = groupPlaybackItem(members);
-        const ongoing = isOngoing(item);
-        const allowed = item.allowed ?? state.targets.some(target => target.id === item.target_id);
-        if (!ongoing && !allowed) continue;
+        if (!isOngoing(item)) continue;
         const row = document.createElement('li');
         row.className = 'room';
         const header = document.createElement('div');
         header.className = 'playing';
         const cover = coverFor(item);
-        if (ongoing && item.cover) {
+        if (item.cover) {
             const slot = document.createElement('span');
             slot.className = 'cover-slot';
             slot.classList.toggle('station', !!item.station);
@@ -619,9 +614,8 @@ function renderOutputs(outputs, force = false) {
         header.append(text);
         row.append(header);
         appendPlaybackControls(row, item, members, outputs);
-        (ongoing ? list : other).append(row);
+        list.append(row);
     }
-    el('otherOutputsPanel').hidden = !other.children.length;
     if (!list.children.length) {
         const row = document.createElement('li');
         row.textContent = 'Keine laufende Wiedergabe gemeldet.';
@@ -774,7 +768,14 @@ function appendRoomControls(card, item, {showVolume = true, showTransport = true
         control.disabled = transportDisabled;
         group.append(control);
     }
-    if (commands.length) card.append(group);
+    if (expected && item.group_size > 1 && item.group_volume_sync === true) {
+        const sync = button('Lautstärke angleichen', () => editPlaybackGroup(sync, 'group_sync_volume',
+            {target_id: item.group_id, expected_members: expected}));
+        sync.title = 'Alle Räume auf die tiefste aktuelle Lautstärke setzen';
+        sync.disabled = transportDisabled;
+        group.append(sync);
+    }
+    if (group.childElementCount) card.append(group);
 }
 
 function applyConnectionState(next, background) {

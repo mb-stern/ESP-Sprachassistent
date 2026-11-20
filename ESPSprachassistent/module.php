@@ -98,6 +98,7 @@ class ESPSprachassistent extends IPSModule
             case 'group_join':
             case 'group_leave':
             case 'group_volume':
+            case 'group_sync_volume':
                 $action = $request['action'];
                 $fields = [
                     'action' => $action,
@@ -110,7 +111,7 @@ class ESPSprachassistent extends IPSModule
                         throw new RuntimeException('Ungültige Gruppenlautstärke.');
                     }
                     $fields['volume'] = $level;
-                } else {
+                } elseif ($action !== 'group_sync_volume') {
                     $fields['member_id'] = $this->Text($request['member_id'] ?? null);
                 }
                 return $this->Api('/api/music/targets', $fields);
@@ -252,7 +253,7 @@ class ESPSprachassistent extends IPSModule
     {
         return $this->Pick($outputs, ['target_id', 'target_name', 'state', 'title', 'artist',
             'album', 'station', 'radio_text', 'status_known', 'stale', 'allowed', 'cover',
-            'volume', 'volume_max', 'grouped', 'group_id', 'group_size', 'queue_count', 'card_transport']);
+            'volume', 'volume_max', 'grouped', 'group_id', 'group_size', 'group_volume_sync', 'queue_count', 'card_transport']);
     }
 
     private function Pick(array $rows, array $keys): array
