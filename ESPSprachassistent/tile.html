@@ -468,17 +468,18 @@ function appendPlaybackGroup(card, item, members, outputs) {
         if (details.open) openPlaybackGroups.add(item.group_id);
         else openPlaybackGroups.delete(item.group_id);
     });
-    if (members.length > 1 && members.every(room => Number.isInteger(room.volume))) {
+    if (item.group_size > 1) {
+        const volumeKnown = members.length === item.group_size && members.every(room => Number.isInteger(room.volume));
         const label = document.createElement('label');
         const slider = document.createElement('input');
         label.className = 'room-volume';
         slider.type = 'range';
         slider.min = '0';
         slider.max = '100';
-        slider.disabled = !enabled;
+        slider.disabled = !enabled || !volumeKnown;
         slider.setAttribute('aria-label', 'Gruppenlautstärke');
-        slider.value = String(Math.round(members.reduce((sum, room) => sum + room.volume, 0) / members.length));
-        const show = () => { summary.textContent = slider.value + ' % · Lautsprecher und Lautstärken'; };
+        slider.value = volumeKnown ? String(Math.round(members.reduce((sum, room) => sum + room.volume, 0) / members.length)) : '0';
+        const show = () => { summary.textContent = (volumeKnown ? slider.value + ' % · ' : '') + 'Lautsprecher und Lautstärken'; };
         show();
         slider.addEventListener('input', show);
         slider.addEventListener('pointerdown', () => { sliderEditingUntil = Date.now() + 2500; });
@@ -517,7 +518,7 @@ function appendPlaybackGroup(card, item, members, outputs) {
         details.append(line);
     }
     card.append(details);
-    appendRoomControls(card, item, {showVolume: members.length === 1, showTransport: enabled, expected});
+    appendRoomControls(card, item, {showVolume: item.group_size === 1, transportDisabled: !enabled, expected});
 }
 
 function appendPlaybackControls(card, item, members, outputs) {
@@ -693,7 +694,7 @@ async function refreshPlayback(previous, revision, expectAlbum = !!previous.albu
     }
 }
 
-function appendRoomControls(card, item, {showVolume = true, showTransport = true, expected} = {}) {
+function appendRoomControls(card, item, {showVolume = true, showTransport = true, transportDisabled = false, expected} = {}) {
     const name = item.target_name || 'Wiedergabeziel';
     if (showVolume && Number.isInteger(item.volume) && Number.isInteger(item.volume_max)) {
         const row = document.createElement('label');
@@ -770,6 +771,7 @@ function appendRoomControls(card, item, {showVolume = true, showTransport = true
             }
         });
         control.setAttribute('aria-label', label + ' · ' + name);
+        control.disabled = transportDisabled;
         group.append(control);
     }
     if (commands.length) card.append(group);
