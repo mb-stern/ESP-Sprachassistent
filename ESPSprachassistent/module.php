@@ -95,6 +95,25 @@ class ESPSprachassistent extends IPSModule
                     }
                     throw $error;
                 }
+            case 'group_join':
+            case 'group_leave':
+            case 'group_volume':
+                $action = $request['action'];
+                $fields = [
+                    'action' => $action,
+                    'target_id' => $this->Text($request['target_id'] ?? null),
+                    'expected_members' => $this->Ids($request['expected_members'] ?? null, 24)
+                ];
+                if ($action === 'group_volume') {
+                    $level = $request['volume'] ?? null;
+                    if (!is_int($level) || $level < 0 || $level > 100) {
+                        throw new RuntimeException('Ungültige Gruppenlautstärke.');
+                    }
+                    $fields['volume'] = $level;
+                } else {
+                    $fields['member_id'] = $this->Text($request['member_id'] ?? null);
+                }
+                return $this->Api('/api/music/targets', $fields);
             case 'volume':
                 $id = $this->Text($request['target_id'] ?? null);
                 $volume = $request['volume'] ?? null;
@@ -118,9 +137,11 @@ class ESPSprachassistent extends IPSModule
                         'action' => $command === 'start' ? 'resume' : $command, 'target_ids' => [$id]
                     ]);
                 }
-                return $this->Api('/api/music/targets', [
-                    'action' => 'transport', 'target_id' => $id, 'command' => $command, 'grouped' => $grouped
-                ]);
+                $fields = ['action' => 'transport', 'target_id' => $id, 'command' => $command, 'grouped' => $grouped];
+                if (array_key_exists('expected_members', $request)) {
+                    $fields['expected_members'] = $this->Ids($request['expected_members'], 24);
+                }
+                return $this->Api('/api/music/targets', $fields);
             case 'refresh':
                 $target = isset($request['target_id']) ? $this->Text($request['target_id']) : null;
                 if ($target === 'esp') {
@@ -231,7 +252,7 @@ class ESPSprachassistent extends IPSModule
     {
         return $this->Pick($outputs, ['target_id', 'target_name', 'state', 'title', 'artist',
             'album', 'station', 'radio_text', 'status_known', 'stale', 'allowed', 'cover',
-            'volume', 'volume_max', 'grouped', 'queue_count', 'card_transport']);
+            'volume', 'volume_max', 'grouped', 'group_id', 'group_size', 'queue_count', 'card_transport']);
     }
 
     private function Pick(array $rows, array $keys): array

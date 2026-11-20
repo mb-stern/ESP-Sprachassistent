@@ -417,10 +417,119 @@ function canControl(item) {
         (item.allowed ?? state.targets.some(target => target.id === item.target_id));
 }
 
-function renderPlaybackDetail(item, cover) {
+const openPlaybackGroups = new Set();
+function playbackGroups(outputs) {
+    const groups = new Map();
+    for (const output of outputs) {
+        const key = output.group_id || output.target_id;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(output);
+    }
+    return [...groups.values()];
+}
+
+function groupPlaybackItem(members) {
+    const first = members[0];
+    return members.find(room => room.target_id === first.group_id && isOngoing(room)) ||
+        members.find(isOngoing) || first;
+}
+
+async function editPlaybackGroup(control, action, fields) {
+    if (cardBusy) return;
+    const revision = ++playbackRevision;
+    cardBusy++;
+    control.disabled = true;
+    try {
+        await send(action, fields);
+        notice('');
+    } catch (error) {
+        notice(error.message);
+    } finally {
+        control.disabled = false;
+        cardBusy--;
+        outputSignature = '';
+        if (revision === playbackRevision) pollPlayback();
+    }
+}
+
+function appendPlaybackGroup(card, item, members, outputs) {
+    const expected = members.map(room => room.target_id);
+    const enabled = members.length === item.group_size && expected.includes(item.group_id) &&
+        members.every(room => canControl(room) && room.status_known && !room.stale &&
+            room.group_size === item.group_size);
+    const fields = {target_id: item.group_id, expected_members: expected};
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'Lautsprecher und Lautstärken';
+    details.append(summary);
+    details.open = openPlaybackGroups.has(item.group_id);
+    details.addEventListener('toggle', () => {
+        if (!details.isConnected) return;
+        if (details.open) openPlaybackGroups.add(item.group_id);
+        else openPlaybackGroups.delete(item.group_id);
+    });
+    if (members.length > 1 && members.every(room => Number.isInteger(room.volume))) {
+        const label = document.createElement('label');
+        const slider = document.createElement('input');
+        label.className = 'room-volume';
+        slider.type = 'range';
+        slider.min = '0';
+        slider.max = '100';
+        slider.disabled = !enabled;
+        slider.setAttribute('aria-label', 'Gruppenlautstärke');
+        slider.value = String(Math.round(members.reduce((sum, room) => sum + room.volume, 0) / members.length));
+        const show = () => { summary.textContent = slider.value + ' % · Lautsprecher und Lautstärken'; };
+        show();
+        slider.addEventListener('input', show);
+        slider.addEventListener('pointerdown', () => { sliderEditingUntil = Date.now() + 2500; });
+        for (const event of ['pointerup', 'pointercancel', 'blur']) {
+            slider.addEventListener(event, () => { sliderEditingUntil = 0; });
+        }
+        slider.addEventListener('change', () => editPlaybackGroup(slider, 'group_volume',
+            {...fields, volume: Number(slider.value)}));
+        label.append('Gruppenlautstärke', slider);
+        card.append(label);
+    }
+    const candidates = new Map(members.map(room => [room.target_id, room]));
+    const home = state.targets.find(room => room.id === item.group_id);
+    for (const target of state.targets) {
+        if (candidates.has(target.id) || !home || target.available === false || systemFor(target) !== systemFor(home)) continue;
+        const output = outputs.find(room => room.target_id === target.id);
+        if (output?.group_size === 1 && !output.stale && output.status_known) candidates.set(target.id, output);
+    }
+    for (const room of candidates.values()) {
+        const isMember = expected.includes(room.target_id);
+        const line = document.createElement('div');
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = isMember;
+        checkbox.disabled = !enabled || (isMember && members.length === 1);
+        checkbox.addEventListener('change', () => {
+            checkbox.checked = isMember;
+            void editPlaybackGroup(checkbox, isMember ? 'group_leave' : 'group_join',
+                {...fields, member_id: room.target_id});
+        });
+        label.className = 'choice';
+        label.append(checkbox, ' ' + room.target_name);
+        line.append(label);
+        if (isMember && members.length > 1) appendRoomControls(line, room, {showTransport:false});
+        details.append(line);
+    }
+    card.append(details);
+    appendRoomControls(card, item, {showVolume: members.length === 1, showTransport: enabled, expected});
+}
+
+function appendPlaybackControls(card, item, members, outputs) {
+    if (item.group_id && item.group_size && (isOngoing(item) || members.length > 1)) {
+        appendPlaybackGroup(card, item, members, outputs);
+    } else if (canControl(item)) appendRoomControls(card, item);
+}
+
+function renderPlaybackDetail(item, cover, members, outputs) {
     const destination = el('playbackDetailRoom');
     const previousFocus = destination.contains(document.activeElement) && document.activeElement.getAttribute('aria-label');
-    const name = item?.target_name || playbackDetail.name || 'Wiedergabeziel';
+    const name = members.map(room => room.target_name).filter(Boolean).join(' · ') || playbackDetail.name || 'Wiedergabeziel';
     el('playbackDetailTitle').textContent = name;
     const article = document.createElement('article');
     article.className = 'room-detail';
@@ -437,7 +546,7 @@ function renderPlaybackDetail(item, cover) {
     summary.className = 'room-detail-summary';
     summary.textContent = item ? roomDescription(item) : 'Nicht erreichbar';
     info.append(summary);
-    if (item && canControl(item)) appendRoomControls(info, item);
+    if (item) appendPlaybackControls(info, item, members, outputs);
     article.append(info);
     destination.replaceChildren(article);
     if (previousFocus) {
@@ -448,15 +557,17 @@ function renderPlaybackDetail(item, cover) {
 
 function renderOutputs(outputs, force = false) {
     if (!force && (cardBusy || touchInProgress() || Date.now() < sliderEditingUntil)) return;
+    const groups = playbackGroups(outputs);
     if (playbackDetail) {
-        const item = outputs.find(row => row.target_id === playbackDetail.targetId);
+        const members = groups.find(group => group.some(room => room.target_id === playbackDetail.targetId)) || [];
+        const item = members.length && groupPlaybackItem(members);
         const currentCover = item && coverFor(item);
         if (currentCover) playbackDetail.cover = currentCover;
         const cover = currentCover || (!item || ['stopped', 'unavailable'].includes(item.state) ? playbackDetail.cover : '');
-        const signature = JSON.stringify([playbackDetail.targetId, item, !!cover]);
+        const signature = JSON.stringify([playbackDetail.targetId, outputs, !!cover]);
         if (force || signature !== outputSignature) {
             outputSignature = signature;
-            renderPlaybackDetail(item, cover);
+            renderPlaybackDetail(item, cover, members, outputs);
         }
         return;
     }
@@ -467,7 +578,8 @@ function renderOutputs(outputs, force = false) {
     outputSignature = signature;
     list.replaceChildren();
     other.replaceChildren();
-    for (const item of outputs) {
+    for (const members of groups) {
+        const item = groupPlaybackItem(members);
         const ongoing = isOngoing(item);
         const allowed = item.allowed ?? state.targets.some(target => target.id === item.target_id);
         if (!ongoing && !allowed) continue;
@@ -499,13 +611,13 @@ function renderOutputs(outputs, force = false) {
         }
         const text = document.createElement('span');
         const name = document.createElement('strong');
-        name.textContent = item.target_name || 'Wiedergabeziel';
+        name.textContent = members.map(room => room.target_name || 'Wiedergabeziel').join(' · ');
         const description = document.createElement('small');
         description.textContent = roomDescription(item);
         text.append(name, description);
         header.append(text);
         row.append(header);
-        if (canControl(item)) appendRoomControls(row, item);
+        appendPlaybackControls(row, item, members, outputs);
         (ongoing ? list : other).append(row);
     }
     el('otherOutputsPanel').hidden = !other.children.length;
@@ -581,9 +693,9 @@ async function refreshPlayback(previous, revision, expectAlbum = !!previous.albu
     }
 }
 
-function appendRoomControls(card, item) {
+function appendRoomControls(card, item, {showVolume = true, showTransport = true, expected} = {}) {
     const name = item.target_name || 'Wiedergabeziel';
-    if (Number.isInteger(item.volume) && Number.isInteger(item.volume_max)) {
+    if (showVolume && Number.isInteger(item.volume) && Number.isInteger(item.volume_max)) {
         const row = document.createElement('label');
         const slider = document.createElement('input');
         const value = document.createElement('output');
@@ -621,7 +733,7 @@ function appendRoomControls(card, item) {
         row.append('Lautstärke', value, slider);
         card.append(row);
     }
-    if (!item.status_known || !item.target_id) return;
+    if (!showTransport || !item.status_known || !item.target_id) return;
     const group = document.createElement('div');
     group.className = 'row';
     group.setAttribute('role', 'group');
@@ -644,7 +756,7 @@ function appendRoomControls(card, item) {
             cardBusy++;
             control.disabled = true;
             try {
-                await send('transport', {target_id: item.target_id, command, grouped: item.grouped === true, legacy: item.card_transport !== true});
+                await send('transport', {target_id: item.target_id, command, grouped: item.grouped === true, legacy: item.card_transport !== true, expected_members: expected});
                 playbackRefreshPending = skip;
                 notice('');
             } catch (error) {
